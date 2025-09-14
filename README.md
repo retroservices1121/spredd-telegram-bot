@@ -2,7 +2,91 @@
 
 A Telegram bot that connects to Spredd Markets on Base blockchain, allowing users to create markets, place bets with USDC, and earn Forecast Points.
 
-## 🌐 Base Blockchain Integration
+## 🏆 Advanced Features
+
+### Forecast Points System:
+- Earn FP for successful trading
+- Weekly leaderboards with USDC rewards
+- Creator bonuses for popular markets
+- Complex FP calculation based on market factors
+
+### Market Analytics:
+- Real-time odds calculation
+- Volume and liquidity tracking
+- Bettor statistics
+- Historical performance data
+
+### Admin Functions:
+- Contract interaction monitoring
+- Treasury management
+- Emergency controls
+- User support tools
+
+## 🚀 Ready to Launch!
+
+Your Spredd Markets Telegram bot will:
+- ✅ **Connect to Base blockchain** automatically
+- ✅ **Work with existing database** (no changes needed)
+- ✅ **Integrate with your contracts** seamlessly
+- ✅ **Scale on Railway** as users grow
+- ✅ **Handle USDC transactions** safely
+
+Just update the admin ID, set environment variables, and deploy!
+
+The bot provides a user-friendly interface to your Base blockchain markets while maintaining security by never handling private keys or user funds directly.
+
+## 🛠 Development
+
+### Local Development:
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/spredd-telegram-bot.git
+cd spredd-telegram-bot
+
+# Install dependencies
+npm install
+
+# Copy environment file
+cp .env.example .env
+
+# Edit .env with your credentials
+# Then run in development mode
+npm run dev
+```
+
+### Testing:
+```bash
+npm test
+```
+
+### Deployment:
+```bash
+# Push to main branch triggers automatic deployment
+git push origin main
+```
+
+## 📝 License
+
+MIT License - see LICENSE file for details.
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## 📞 Support
+
+For support or questions:
+- Create an issue on GitHub
+- Check Railway logs for errors
+- Verify environment variables are set correctly
+
+---
+
+**Important Security Note:** This bot is designed to be non-custodial. It never holds user funds or private keys. Users execute all transactions through their own wallets, ensuring maximum security.🌐 Base Blockchain Integration
 
 ### Smart Contracts on Base:
 - **USDC Token:** `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
