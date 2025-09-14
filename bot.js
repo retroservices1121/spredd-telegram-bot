@@ -105,7 +105,7 @@ if (isDevelopment) {
 
 // Admin user IDs - REPLACE WITH YOUR TELEGRAM USER ID
 const ADMIN_IDS = [
-  123456789, // Replace with your actual Telegram user ID from @userinfobot
+  258664955, // Replace with your actual Telegram user ID from @userinfobot
 ];
 
 function isAdmin(userId) {
