@@ -4,13 +4,12 @@
   "description": "Telegram bot for Spredd Markets on Base blockchain",
   "main": "bot.js",
   "engines": {
-    "node": "20.x",
+    "node": ">=18.0.0",
     "npm": ">=9.0.0"
   },
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js",
-    "build": "echo 'No build step needed'",
     "test": "echo 'No tests specified' && exit 0"
   },
   "dependencies": {
