@@ -167,6 +167,10 @@ async function getOrCreateUser(telegramId, username = null, walletAddress = null
         username: username || `tg_${telegramId}`,
         wallet_address: walletAddress,
         about: "Hey, I'm a forecaster!", // Add this line to match your existing data
+        role: "USER".
+        profile_pic: null,
+        createAt: new Date().toISOString(),
+        updateAt: new Date().toISOString(),
         created_at: new Date().toISOString()
       };
 
