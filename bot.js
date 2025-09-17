@@ -1,11 +1,4 @@
-// Store market mappings for callback data
-const marketMappings = new Map();
-let marketCounter = 0;
-
-// Get markets from blockchain with rate limiting and retry
-async function getMarketsFromBlockchain() {
-  try {
-    const marketIds = await retryRPCCall(async () =>// bot.js - Spredd Markets Bot with Bot-Created Wallet System
+// bot.js - Spredd Markets Bot with Bot-Created Wallet System
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
 const { ethers } = require('ethers');
@@ -70,6 +63,7 @@ async function retryRPCCall(fn, maxRetries = 3) {
     }
   }
 }
+
 const adminWallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, provider);
 
 // Contract ABIs
@@ -92,9 +86,15 @@ const MARKET_ABI = [
   'function placeBet(bool _outcome, uint256 _amount) external'
 ];
 
-// Initialize contracts
-const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, provider);
-const factoryContract = new ethers.Contract(SPREDD_FACTORY_ADDRESS, FACTORY_ABI, provider);
+// Initialize contracts with retry-enabled provider
+let usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, provider);
+let factoryContract = new ethers.Contract(SPREDD_FACTORY_ADDRESS, FACTORY_ABI, provider);
+
+// Update contracts when provider switches
+function updateContracts() {
+  usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, provider);
+  factoryContract = new ethers.Contract(SPREDD_FACTORY_ADDRESS, FACTORY_ABI, provider);
+}
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -202,6 +202,10 @@ const walletMenu = createInlineKeyboard([
   [{ text: '⬅️ Back to Main Menu', callback_data: 'main_menu' }]
 ]);
 
+// Store market mappings for callback data
+const marketMappings = new Map();
+let marketCounter = 0;
+
 // Helper functions for wallet management
 
 // Get or create user (fixed constraint handling)
@@ -224,7 +228,6 @@ async function getOrCreateUser(telegramId, username = null) {
         about: "Hey, I'm a forecaster!",
         role: "USER",
         profile_pic: null,
-        // Remove wallet_address field to avoid constraint issues
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -311,11 +314,16 @@ async function getUserSpreddWallet(userId) {
   }
 }
 
-// Get USDC balance for an address
+// Get USDC balance with retry
 async function getUSDCBalance(address) {
   try {
     if (!ethers.isAddress(address)) return '0';
-    const balance = await usdcContract.balanceOf(address);
+    
+    const balance = await retryRPCCall(async () => {
+      updateContracts(); // Update contracts with current provider
+      return await usdcContract.balanceOf(address);
+    });
+    
     return ethers.formatUnits(balance, 6);
   } catch (error) {
     console.error('Error getting USDC balance:', error);
@@ -323,20 +331,19 @@ async function getUSDCBalance(address) {
   }
 }
 
-// Get market creation fee
+// Get market creation fee with retry
 async function getMarketCreationFee() {
   try {
-    const fee = await factoryContract.marketCreationFee();
+    const fee = await retryRPCCall(async () => {
+      updateContracts();
+      return await factoryContract.marketCreationFee();
+    });
     return ethers.formatUnits(fee, 6);
   } catch (error) {
     console.error('Error getting market creation fee:', error);
     return '3';
   }
 }
-
-// Store market mappings for callback data
-const marketMappings = new Map();
-let marketCounter = 0;
 
 // Get markets from blockchain with rate limiting and retry
 async function getMarketsFromBlockchain() {
@@ -922,27 +929,6 @@ Send the amount or use /cancel to abort.`, {
     await bot.sendMessage(chatId, '❌ Error placing bet. Please try again later.');
   }
 }
-      maxBalance: balance,
-      timestamp: Date.now()
-    });
-
-    await bot.sendMessage(chatId, `🎯 **Place Bet**
-
-**Market:** ${marketDetails.question}
-**Betting on:** ${optionName}
-**Your Balance:** ${balance} USDC
-
-💰 **Enter bet amount (1-${Math.floor(parseFloat(balance))} USDC):**
-
-Send the amount or use /cancel to abort.`, {
-      parse_mode: 'Markdown'
-    });
-
-  } catch (error) {
-    console.error('Error initiating bet:', error);
-    await bot.sendMessage(chatId, '❌ Error placing bet. Please try again later.');
-  }
-}
 
 async function handleCreateMarket(chatId, userId) {
   try {
@@ -1171,7 +1157,7 @@ This may take a few moments.`);
 **Question:** ${session.question}
 **Option A:** ${session.optionA}
 **Option B:** ${session.optionB}
-**End Date:** ${new Date(session.endTime).toLocaleString()}
+**End Date:** ${new Date(session.endTime * 1000).toLocaleString()}
 **Fee Paid:** ${fee} USDC
 
 🎉 Your market is now live on Spredd Markets!
