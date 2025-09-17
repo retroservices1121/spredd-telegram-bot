@@ -169,9 +169,8 @@ async function getOrCreateUser(telegramId, username = null, walletAddress = null
         about: "Hey, I'm a forecaster!",
         role: "USER",
         profile_pic: null,
-        createAt: new Date().toISOString(),
-        updateAt: new Date().toISOString(),
-        created_at: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
 
       const { data: createdUser, error: createError } = await supabase
