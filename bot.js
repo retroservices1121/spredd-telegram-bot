@@ -152,7 +152,7 @@ const walletMenu = createInlineKeyboard([
 async function getOrCreateUser(telegramId, username = null, walletAddress = null) {
   try {
     let { data: user, error } = await supabase
-      .from('users')
+      .from('User')
       .select('*')
       .eq('telegram_id', telegramId)
       .single();
@@ -170,7 +170,7 @@ async function getOrCreateUser(telegramId, username = null, walletAddress = null
       };
 
       const { data: createdUser, error: createError } = await supabase
-        .from('users')
+        .from('User')
         .insert([newUser])
         .select()
         .single();
@@ -182,7 +182,7 @@ async function getOrCreateUser(telegramId, username = null, walletAddress = null
     // Update wallet address if provided
     if (walletAddress && user.wallet_address !== walletAddress) {
       const { data: updatedUser, error: updateError } = await supabase
-        .from('users')
+        .from('User')
         .update({ wallet_address: walletAddress })
         .eq('id', user.id)
         .select()
@@ -619,7 +619,7 @@ async function handleLeaderboard(chatId) {
   try {
     // Get top users by total FP from database
     const { data: topUsers } = await supabase
-      .from('users')
+      .from('User')
       .select('username, total_trader_fp, total_creator_fp, total_rewards_earned')
       .order('total_trader_fp', { ascending: false })
       .limit(10);
