@@ -165,9 +165,9 @@ async function getOrCreateUser(telegramId, username = null, walletAddress = null
       const newUser = {
         telegram_id: telegramId,
         username: username || `tg_${telegramId}`,
-        wallet_address: walletAddress,
-        about: "Hey, I'm a forecaster!", // Add this line to match your existing data
-        role: "USER".
+        wallet_address: walletAddress || null,
+        about: "Hey, I'm a forecaster!",
+        role: "USER",
         profile_pic: null,
         createAt: new Date().toISOString(),
         updateAt: new Date().toISOString(),
