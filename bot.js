@@ -946,30 +946,168 @@ Send the address or use /cancel to abort.`, {
 
 // bot.js - PART 3/3: Market Functions, Message Handlers, and Bot Completion - UPDATED
 
-// FIXED BROWSE MARKETS - Using correct column names from your Supabase table
+// DEBUG BROWSE MARKETS - Let's see what columns exist
 async function handleBrowseMarketsOptimized(chatId, userId) {
   try {
     const loadingMsg = await bot.sendMessage(chatId, '🔍 Loading markets from database...');
     
-    // Use the exact column names from your Supabase table
+    // First, let's see what columns actually exist
+    const { data: testMarket, error: testError } = await supabase
+      .from('Market')
+      .select('*')
+      .limit(1);
+    
+    if (testMarket && testMarket.length > 0) {
+      console.log('Available columns:', Object.keys(testMarket[0]));
+      await bot.sendMessage(chatId, `Debug: Available columns: ${Object.keys(testMarket[0]).join(', ')}`);
+    }
+    
+    // Try a basic query first
     const { data: dbMarkets, error } = await supabase
       .from('Market')
-      .select(`
-        id,
-        question,
-        optionA_alias,
-        optionB_alias,
-        endTime,
-        status,
-        contractAddress,
-        createdAt,
-        image,
-        tags,
-        Creator:creatorId(username)
-      `)
+      .select('*')
       .eq('status', 'ACTIVE')
       .order('createdAt', { ascending: false })
       .limit(6);
+
+    if (error) {
+      console.error('Database error:', error);
+      throw error;
+    }
+
+    if (!dbMarkets || dbMarkets.length === 0) {
+      await bot.editMessageText('📭 No active markets found.', {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '➕ Create Market', callback_data: 'create_market' }],
+            [{ text: '⬅️ Back to Main Menu', callback_data: 'main_menu' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    let message = '🏪 **Active Markets:**\n\n';
+    const buttons = [];
+
+    for (let i = 0; i < Math.min(dbMarkets.length, 4); i++) {
+      const market = dbMarkets[i];
+      const endDate = new Date(market.endTime);
+      const isEnded = endDate < new Date();
+      
+      const shortId = `m${marketCounter++}`;
+      
+      // Use whatever column names exist for options
+      const optionA = market.optionA_alias || market.optionA || market.option_a || 'Option A';
+      const optionB = market.optionB_alias || market.optionB || market.option_b || 'Option B';
+      
+      marketMappings.set(shortId, {
+        source: 'database',
+        id: market.id,
+        contractAddress: market.contractAddress,
+        question: market.question,
+        optionA: optionA,
+        optionB: optionB,
+        endTime: market.endTime,
+        image: market.image,
+        tags: market.tags
+      });
+      
+      message += `${i + 1}. **${market.question}**\n`;
+      message += `   📊 ${optionA} vs ${optionB}\n`;
+      if (market.tags) {
+        message += `   🏷️ ${market.tags}\n`;
+      }
+      message += `   📅 Expires: ${endDate.toLocaleDateString()}\n`;
+      message += `   ${isEnded ? '⏰ Ended' : '🟢 Active'}\n\n`;
+      
+      buttons.push([{ 
+        text: `📊 View Market ${i + 1}`, 
+        callback_data: `market_${shortId}` 
+      }]);
+    }
+
+    buttons.push([{ text: '🔄 Refresh Markets', callback_data: 'browse_markets' }]);
+    buttons.push([{ text: '⬅️ Back to Main Menu', callback_data: 'main_menu' }]);
+
+    await bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: loadingMsg.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    });
+
+  } catch (error) {
+    console.error('Error browsing markets:', error);
+    await bot.sendMessage(chatId, '❌ Error loading markets. Please try again later.', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ]
+      }
+    });
+  }
+}
+
+// ADD MISSING IMAGE UPLOAD FUNCTION
+async function handleImageUpload(chatId, userId, msg) {
+  try {
+    const session = userSessions.get(chatId);
+    if (!session || session.action !== 'create_market') {
+      await bot.sendMessage(chatId, '❌ Invalid session. Please start market creation first.');
+      return;
+    }
+
+    // Get the largest photo size
+    const photo = msg.photo[msg.photo.length - 1];
+    const fileId = photo.file_id;
+
+    try {
+      // Get file info from Telegram
+      const file = await bot.getFile(fileId);
+      const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+      
+      console.log('📸 Image uploaded successfully:', fileUrl);
+      
+      // Store the image URL
+      session.imageUrl = fileUrl;
+      session.step = 'tags';
+      userSessions.set(chatId, session);
+
+      await bot.sendMessage(chatId, `✅ **Image uploaded successfully!**
+
+📝 **Step 6/6: Select Category Tags**
+
+Choose categories that best describe your market:`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: createCategoryButtons() }
+      });
+
+    } catch (fileError) {
+      console.error('Error processing uploaded image:', fileError);
+      
+      // Continue without image
+      session.step = 'tags';
+      userSessions.set(chatId, session);
+
+      await bot.sendMessage(chatId, `⚠️ Could not process image, continuing without it.
+
+📝 **Step 6/6: Select Category Tags**
+
+Choose categories that best describe your market:`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: createCategoryButtons() }
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in handleImageUpload:', error);
+    await bot.sendMessage(chatId, '❌ Error uploading image. Please try again.');
+  }
+}
 
     if (error) {
       console.error('Database error:', error);
