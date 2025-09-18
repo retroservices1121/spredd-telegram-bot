@@ -102,6 +102,12 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
+// Initialize Supabase client with service role for admin operations
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+);
+
 // Initialize Telegram bot
 let bot;
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -278,7 +284,8 @@ async function createSpreddWallet(userId) {
     
     console.log('Inserting wallet data:', { ...walletData, encrypted_private_key: '[REDACTED]' });
     
-    const { data, error } = await supabase
+    // Use admin client for wallet operations
+    const { data, error } = await supabaseAdmin
       .from('bot_wallets')
       .insert([walletData])
       .select()
@@ -321,7 +328,8 @@ async function getUserSpreddWallet(userId) {
 
     if (!user) return null;
 
-    const { data: wallet } = await supabase
+    // Use admin client for wallet operations
+    const { data: wallet } = await supabaseAdmin
       .from('bot_wallets')
       .select('*')
       .eq('user_id', user.id)
