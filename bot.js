@@ -108,6 +108,14 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
+// Debug: Check which keys are being used
+console.log('Supabase setup:', {
+  hasServiceRoleKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  serviceKeyLength: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0,
+  anonKeyLength: process.env.SUPABASE_ANON_KEY?.length || 0,
+  usingServiceRole: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'YES' : 'NO - FALLBACK TO ANON'
+});
+
 // Initialize Telegram bot
 let bot;
 const token = process.env.TELEGRAM_BOT_TOKEN;
