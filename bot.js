@@ -571,6 +571,11 @@ bot.on('callback_query', async (query) => {
   const userId = query.from.id;
   const data = query.data;
 
+  // IMPORTANT: Answer the callback query immediately to stop "connecting" indicator
+  bot.answerCallbackQuery(query.id).catch(console.error);
+
+  console.log(`Received callback: ${data} from user ${userId}`);
+
   try {
     switch (data) {
       case 'main_menu':
@@ -580,6 +585,7 @@ bot.on('callback_query', async (query) => {
         await handleBrowseMarkets(chatId, userId);
         break;
       case 'create_market':
+        console.log('Handling create_market callback');
         await handleCreateMarket(chatId, userId);
         break;
       case 'wallet_menu':
@@ -616,10 +622,14 @@ bot.on('callback_query', async (query) => {
         await handleSpreddWalletInfo(chatId);
         break;
       default:
+        console.log(`Checking if ${data} is a market or bet action`);
         if (data.startsWith('market_')) {
           await handleMarketAction(chatId, userId, data);
         } else if (data.startsWith('bet_')) {
           await handleBetAction(chatId, userId, data);
+        } else {
+          console.log(`Unknown callback data: ${data}`);
+          await bot.sendMessage(chatId, '❌ Unknown action. Please try again.', mainMenu);
         }
         break;
     }
@@ -627,8 +637,6 @@ bot.on('callback_query', async (query) => {
     console.error('Error handling callback:', error);
     await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
   }
-
-  bot.answerCallbackQuery(query.id);
 });
 
 // Handler functions
@@ -1057,8 +1065,11 @@ Send the amount or use /cancel to abort.`, {
 
 async function handleCreateMarket(chatId, userId) {
   try {
+    console.log(`Starting handleCreateMarket for user ${userId}`);
+    
     const wallet = await getUserSpreddWallet(userId);
     if (!wallet) {
+      console.log('User has no wallet, prompting to create one');
       await bot.sendMessage(chatId, '❌ You need a Spredd Wallet to create markets!', {
         ...createInlineKeyboard([
           [{ text: '🆕 Create Spredd Wallet', callback_data: 'create_spredd_wallet' }],
@@ -1068,10 +1079,14 @@ async function handleCreateMarket(chatId, userId) {
       return;
     }
 
+    console.log('Getting user balance and market creation fee...');
     const balance = await getUSDCBalance(wallet.address);
     const fee = await getMarketCreationFee();
     
+    console.log(`User balance: ${balance} USDC, Creation fee: ${fee} USDC`);
+    
     if (parseFloat(balance) < parseFloat(fee)) {
+      console.log('Insufficient balance for market creation');
       await bot.sendMessage(chatId, `❌ Insufficient balance for market creation.
 
 **Required:** ${fee} USDC
@@ -1087,6 +1102,7 @@ Please fund your wallet first.`, {
       return;
     }
 
+    console.log('Setting up market creation session');
     // Set up market creation session
     userSessions.set(chatId, {
       action: 'create_market',
@@ -1094,6 +1110,7 @@ Please fund your wallet first.`, {
       timestamp: Date.now()
     });
 
+    console.log('Sending market creation prompt');
     await bot.sendMessage(chatId, `➕ **Create New Market**
 
 **Creation Fee:** ${fee} USDC
@@ -1107,9 +1124,11 @@ Send your question or use /cancel to abort.`, {
       parse_mode: 'Markdown'
     });
 
+    console.log('Market creation flow initiated successfully');
+
   } catch (error) {
-    console.error('Error creating market:', error);
-    await bot.sendMessage(chatId, '❌ Error creating market. Please try again later.');
+    console.error('Error in handleCreateMarket:', error);
+    await bot.sendMessage(chatId, '❌ Error setting up market creation. Please try again later.');
   }
 }
 
