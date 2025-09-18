@@ -47,18 +47,28 @@ function switchRPCProvider() {
   return provider;
 }
 
-// Retry function for RPC calls
-async function retryRPCCall(fn, maxRetries = 3) {
+// Retry function for RPC calls with more aggressive backoff
+async function retryRPCCall(fn, maxRetries = 5) {
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await fn();
     } catch (error) {
-      if (error.message.includes('rate limit') && i < maxRetries - 1) {
-        console.log(`Rate limit hit, switching provider and retrying... (${i + 1}/${maxRetries})`);
+      const isRateLimit = error.message.includes('rate limit') || 
+                         error.message.includes('over rate limit') ||
+                         error.code === -32016;
+      
+      if (isRateLimit && i < maxRetries - 1) {
+        console.log(`🔄 Rate limit hit, attempt ${i + 1}/${maxRetries}. Switching provider and waiting...`);
         switchRPCProvider();
-        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+        
+        // More aggressive exponential backoff: 3s, 6s, 12s, 24s
+        const delay = 3000 * Math.pow(2, i);
+        console.log(`⏳ Waiting ${delay/1000}s before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
+      
+      // For non-rate-limit errors or final retry, throw the error
       throw error;
     }
   }
@@ -66,24 +76,31 @@ async function retryRPCCall(fn, maxRetries = 3) {
 
 const adminWallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, provider);
 
-// Contract ABIs
+// Contract ABIs - Updated with correct interfaces from the smart contracts
 const USDC_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function decimals() view returns (uint8)',
   'function approve(address spender, uint256 amount) returns (bool)',
-  'function transfer(address to, uint256 amount) returns (bool)'
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)'
 ];
 
 const FACTORY_ABI = [
   'function getAllMarkets() view returns (bytes32[] memory)',
   'function getMarketDetails(bytes32 _marketId) view returns (string memory question, string memory optionA, string memory optionB, uint256 endTime, bool resolved, uint256 volumeA, uint256 volumeB, uint256 totalVolume, uint256 oddsA, uint256 oddsB, uint256 bettorCount)',
   'function getMarketAddress(bytes32 _marketId) view returns (address)',
-  'function marketCreationFee() view returns (uint256)',
-  'function createMarket(string memory _question, string memory _optionA, string memory _optionB, uint256 _endTime) payable returns (bytes32 marketId, address marketContract)'
+  'function getMarketCreationFee() view returns (uint256)',
+  'function createMarket(string memory _question, string memory _optionA, string memory _optionB, uint256 _endTime) returns (bytes32 marketId, address marketContract)',
+  'function markets(bytes32 marketId) view returns (address)'
 ];
 
 const MARKET_ABI = [
-  'function placeBet(bool _outcome, uint256 _amount) external'
+  'function placeBet(bool _betOnA, uint256 _amount) external',
+  'function getMarketInfo() view returns (string memory question, string memory optionA, string memory optionB, uint256 endTime, uint8 outcome, bool resolved, uint256 creationTime)',
+  'function getMarketVolumes() view returns (uint256 volumeA, uint256 volumeB, uint256 totalVolume, uint256 creatorFees, uint256 factoryFees, uint256 totalBets, bool feesDistributed)',
+  'function getMarketOdds() view returns (uint256 oddsA, uint256 oddsB, uint256 totalVolume)',
+  'function getUserBet(address _user) view returns (uint256 amountA, uint256 amountB, bool claimed, uint256 firstPositionTime)',
+  'function calculatePotentialWinnings(bool _betOnA, uint256 _betAmount) view returns (uint256 potentialWinnings, uint256 netBetAmount)'
 ];
 
 // Initialize contracts with retry-enabled provider
@@ -377,50 +394,102 @@ async function getMarketCreationFee() {
   try {
     const fee = await retryRPCCall(async () => {
       updateContracts();
-      return await factoryContract.marketCreationFee();
+      return await factoryContract.getMarketCreationFee();
     });
     return ethers.formatUnits(fee, 6);
   } catch (error) {
     console.error('Error getting market creation fee:', error);
-    return '3';
+    return '3'; // Default 3 USDC as specified by user
   }
 }
 
-// Get markets from blockchain with rate limiting and retry
+// Get markets from database and blockchain (hybrid approach)
 async function getMarketsFromBlockchain() {
   try {
-    const marketIds = await retryRPCCall(async () => {
-      updateContracts();
-      return await factoryContract.getAllMarkets();
-    });
+    console.log('🔍 Fetching markets from database...');
     
+    // First, get markets from your database
+    const { data: dbMarkets, error } = await supabase
+      .from('Market')
+      .select(`
+        *,
+        Creator:creatorId(username)
+      `)
+      .eq('status', 'ACTIVE')
+      .order('createdAt', { ascending: false })
+      .limit(6);
+
+    if (error) {
+      console.error('Database error:', error);
+    }
+
     const markets = [];
 
-    // Process markets in batches to avoid rate limiting
-    const batchSize = 2;
-    const recentMarkets = marketIds.slice(-8); // Reduced from 10 to 8
-    
-    for (let i = 0; i < recentMarkets.length; i += batchSize) {
-      const batch = recentMarkets.slice(i, i + batchSize);
+    if (dbMarkets && dbMarkets.length > 0) {
+      console.log(`📊 Found ${dbMarkets.length} markets in database`);
       
-      const batchResults = await Promise.allSettled(batch.map(async (marketId) => {
-        // Add delay between calls
-        await new Promise(resolve => setTimeout(resolve, 300));
+      for (let i = 0; i < dbMarkets.length; i++) {
+        const dbMarket = dbMarkets[i];
         
-        return await retryRPCCall(async () => {
-          updateContracts();
-          return await factoryContract.getMarketDetails(marketId);
+        // Create short mapping for callback data
+        const shortId = `m${marketCounter++}`;
+        
+        // For database markets, use a different mapping that includes DB ID
+        marketMappings.set(shortId, {
+          source: 'database',
+          id: dbMarket.id,
+          contractAddress: dbMarket.contractAddress
         });
-      }));
+        
+        markets.push({
+          id: dbMarket.id,
+          shortId: shortId,
+          question: dbMarket.question,
+          optionA: dbMarket.optionA,
+          optionB: dbMarket.optionB,
+          endTime: Math.floor(new Date(dbMarket.endTime).getTime() / 1000),
+          resolved: dbMarket.status === 'RESOLVED',
+          volumeA: '0', // You might want to calculate this from trades
+          volumeB: '0',
+          totalVolume: '0',
+          oddsA: 5000, // Default 50%
+          oddsB: 5000, // Default 50%
+          bettorCount: 0, // Calculate from trades if needed
+          source: 'database'
+        });
+        
+        console.log(`✅ Loaded market: ${dbMarket.question.substring(0, 50)}...`);
+      }
+    } else {
+      console.log('📭 No markets found in database, trying blockchain...');
       
-      batchResults.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          const marketId = batch[index];
-          const details = result.value;
+      // Fallback to blockchain markets if no database markets
+      const marketIds = await retryRPCCall(async () => {
+        updateContracts();
+        return await factoryContract.getAllMarkets();
+      });
+      
+      // Process only a few blockchain markets to avoid rate limits
+      const recentMarkets = marketIds.slice(-3);
+      
+      for (let i = 0; i < recentMarkets.length; i++) {
+        const marketId = recentMarkets[i];
+        
+        try {
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
           
-          // Create short mapping for callback data
+          const details = await retryRPCCall(async () => {
+            updateContracts();
+            return await factoryContract.getMarketDetails(marketId);
+          });
+          
           const shortId = `m${marketCounter++}`;
-          marketMappings.set(shortId, marketId);
+          marketMappings.set(shortId, {
+            source: 'blockchain',
+            id: marketId
+          });
           
           markets.push({
             id: marketId,
@@ -435,22 +504,21 @@ async function getMarketsFromBlockchain() {
             totalVolume: ethers.formatUnits(details.totalVolume, 6),
             oddsA: details.oddsA,
             oddsB: details.oddsB,
-            bettorCount: details.bettorCount
+            bettorCount: details.bettorCount,
+            source: 'blockchain'
           });
-        } else {
-          console.error(`Error getting details for market ${batch[index]}:`, result.reason);
+          
+        } catch (error) {
+          console.error(`❌ Error processing blockchain market ${marketId}:`, error.message);
         }
-      });
-      
-      // Longer delay between batches
-      if (i + batchSize < recentMarkets.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
+    console.log(`📋 Successfully loaded ${markets.length} markets`);
     return markets;
+    
   } catch (error) {
-    console.error('Error getting markets from blockchain:', error);
+    console.error('Error getting markets:', error);
     return [];
   }
 }
@@ -1196,10 +1264,11 @@ async function handleConfirmCreateMarket(chatId, userId) {
     }
 
     const wallet = await getUserSpreddWallet(userId);
+    if (!wallet) {
+      throw new Error('Wallet not found');
+    }
+
     const fee = await getMarketCreationFee();
-    
-    // Here you would implement the actual market creation transaction
-    // For now, we'll simulate it
     
     await bot.sendMessage(chatId, `⏳ **Creating Market...**
 
@@ -1207,18 +1276,110 @@ Please wait while we process your market creation on the blockchain...
 
 This may take a few moments.`);
 
-    // Simulate transaction delay
-    setTimeout(async () => {
+    try {
+      // Create wallet instance for transactions
+      const userWallet = new ethers.Wallet(wallet.privateKey, provider);
+      
+      // Create factory contract with signer
+      const factoryWithSigner = new ethers.Contract(SPREDD_FACTORY_ADDRESS, FACTORY_ABI, userWallet);
+      
+      // Convert fee to USDC format (6 decimals)
+      const feeWei = ethers.parseUnits(fee, 6);
+      
+      // Convert end time to proper format
+      const endTime = Math.floor(session.endTime);
+      
+      console.log('Creating market with params:', {
+        question: session.question,
+        optionA: session.optionA,
+        optionB: session.optionB,
+        endTime: endTime,
+        fee: fee
+      });
+
+      // First approve USDC for market creation fee
+      const usdcWithSigner = new ethers.Contract(USDC_ADDRESS, USDC_ABI, userWallet);
+      console.log('Approving USDC for market creation fee...');
+      const approveTx = await usdcWithSigner.approve(SPREDD_FACTORY_ADDRESS, feeWei);
+      await approveTx.wait();
+
+      // Create market on blockchain
+      const createTx = await factoryWithSigner.createMarket(
+        session.question,
+        session.optionA,
+        session.optionB,
+        endTime
+      );
+      
+      const receipt = await createTx.wait();
+      console.log('Market creation tx:', receipt.hash);
+
+      // Parse the MarketCreated event to get market ID and contract address
+      let marketId, marketContract;
+      for (const log of receipt.logs) {
+        try {
+          const parsedLog = factoryWithSigner.interface.parseLog(log);
+          if (parsedLog.name === 'MarketCreated') {
+            marketId = parsedLog.args.marketId;
+            marketContract = parsedLog.args.marketContract;
+            break;
+          }
+        } catch (e) {
+          // Skip logs that don't match our interface
+          continue;
+        }
+      }
+
+      if (!marketId || !marketContract) {
+        throw new Error('Could not parse market creation event');
+      }
+
+      // Get user from database
+      const { data: user } = await supabase
+        .from('User')
+        .select('id')
+        .eq('telegram_id', userId)
+        .single();
+
+      // Create market record in database
+      const marketData = {
+        question: session.question,
+        description: `${session.optionA} vs ${session.optionB}`,
+        optionA: session.optionA,
+        optionB: session.optionB,
+        image: '',
+        endTime: new Date(endTime * 1000).toISOString(),
+        tags: '',
+        metadata_options: JSON.stringify([session.optionA, session.optionB]),
+        creatorId: user.id,
+        contractAddress: marketContract,
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      const { data: dbMarket, error: marketError } = await supabaseAdmin
+        .from('Market')
+        .insert([marketData])
+        .select()
+        .single();
+
+      if (marketError) {
+        console.error('Error creating market record:', marketError);
+        // Don't fail the transaction, just log the error
+      }
+
       await bot.sendMessage(chatId, `✅ **Market Created Successfully!**
 
 **Question:** ${session.question}
 **Option A:** ${session.optionA}
 **Option B:** ${session.optionB}
-**End Date:** ${new Date(session.endTime * 1000).toLocaleString()}
+**End Date:** ${new Date(endTime * 1000).toLocaleString()}
 **Fee Paid:** ${fee} USDC
+**Transaction:** [View on BaseScan](https://basescan.org/tx/${receipt.hash})
 
 🎉 Your market is now live on Spredd Markets!
-Users can start placing bets immediately.
+Users can start placing bets immediately on both the website and bot.
 
 View it at: ${WEBSITE_URL}`, {
         parse_mode: 'Markdown',
@@ -1228,13 +1389,38 @@ View it at: ${WEBSITE_URL}`, {
           [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
         ])
       });
-    }, 3000);
+
+    } catch (error) {
+      console.error('Blockchain transaction error:', error);
+      throw error;
+    }
 
     userSessions.delete(chatId);
 
   } catch (error) {
     console.error('Error confirming market creation:', error);
-    await bot.sendMessage(chatId, '❌ Error creating market. Please try again later.');
+    
+    let errorMessage = 'Unknown error occurred';
+    if (error.message.includes('insufficient funds')) {
+      errorMessage = 'Insufficient USDC balance for creation fee';
+    } else if (error.message.includes('End time must be in the future')) {
+      errorMessage = 'End time must be in the future';
+    } else if (error.message.includes('user rejected')) {
+      errorMessage = 'Transaction was rejected';
+    } else {
+      errorMessage = error.message;
+    }
+    
+    await bot.sendMessage(chatId, `❌ **Market Creation Failed**
+
+Error: ${errorMessage}
+
+Please try again or contact support if the issue persists.`, {
+      ...createInlineKeyboard([
+        [{ text: '🔄 Try Again', callback_data: 'create_market' }],
+        [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+      ])
+    });
   }
 }
 
@@ -1383,8 +1569,8 @@ async function handleBetAmount(chatId, userId, text, session) {
     return;
   }
 
-  // Here you would implement the actual betting transaction
-  await bot.sendMessage(chatId, `⏳ **Processing Bet...**
+  try {
+    await bot.sendMessage(chatId, `⏳ **Processing Bet...**
 
 **Market:** ${session.question}
 **Betting on:** ${session.optionName}
@@ -1392,16 +1578,103 @@ async function handleBetAmount(chatId, userId, text, session) {
 
 Please wait while we process your bet on the blockchain...`);
 
-  // Simulate transaction delay
-  setTimeout(async () => {
+    // Get user wallet
+    const wallet = await getUserSpreddWallet(userId);
+    if (!wallet) {
+      throw new Error('Wallet not found');
+    }
+
+    // Create wallet instance for transactions
+    const userWallet = new ethers.Wallet(wallet.privateKey, provider);
+
+    // Get market contract address - handle both database and blockchain markets
+    let marketAddress;
+    const marketMapping = marketMappings.get(session.shortId);
+    
+    if (marketMapping && marketMapping.source === 'database') {
+      // For database markets, get the contract address from the Market table
+      const { data: dbMarket } = await supabase
+        .from('Market')
+        .select('contractAddress')
+        .eq('id', marketMapping.id)
+        .single();
+      
+      if (!dbMarket || !dbMarket.contractAddress) {
+        throw new Error('Market contract address not found');
+      }
+      marketAddress = dbMarket.contractAddress;
+    } else {
+      // For blockchain markets, get address from factory
+      marketAddress = await retryRPCCall(async () => {
+        updateContracts();
+        return await factoryContract.getMarketAddress(session.marketId);
+      });
+    }
+
+    // Create market contract instance
+    const marketContract = new ethers.Contract(marketAddress, MARKET_ABI, userWallet);
+
+    // Convert amount to USDC format (6 decimals)
+    const amountWei = ethers.parseUnits(amount.toString(), 6);
+
+    // Check current allowance
+    const usdcWithSigner = new ethers.Contract(USDC_ADDRESS, USDC_ABI, userWallet);
+    const currentAllowance = await usdcWithSigner.allowance(wallet.address, marketAddress);
+    
+    // Approve USDC spending if needed
+    if (currentAllowance < amountWei) {
+      console.log(`Approving ${amount} USDC for market contract...`);
+      const approveTx = await usdcWithSigner.approve(marketAddress, amountWei);
+      await approveTx.wait();
+      console.log('USDC approval confirmed');
+    }
+
+    console.log(`Placing bet: ${amount} USDC on ${session.optionName} (betOnA: ${session.outcome})`);
+    
+    // Place the bet on blockchain (true for option A, false for option B)
+    const betTx = await marketContract.placeBet(session.outcome, amountWei);
+    const receipt = await betTx.wait();
+    console.log('Bet transaction confirmed:', receipt.hash);
+
+    // Get user from database for trade record
+    const { data: user } = await supabase
+      .from('User')
+      .select('id')
+      .eq('telegram_id', userId)
+      .single();
+
+    // Create trade record in database
+    const tradeData = {
+      unique_id: `${receipt.hash}-${Date.now()}`,
+      order_type: 'BUY',
+      order_size: amountWei.toString(),
+      amount: amountWei.toString(),
+      afterPrice: 0, // Will be calculated by backend
+      marketId: marketMapping && marketMapping.source === 'database' ? marketMapping.id : null,
+      endIndex: session.outcome ? 1 : 2, // 1 for option A, 2 for option B
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const { error: tradeError } = await supabaseAdmin
+      .from('Trade')
+      .insert([tradeData]);
+
+    if (tradeError) {
+      console.error('Error creating trade record:', tradeError);
+      // Don't fail the transaction, just log the error
+    }
+
     await bot.sendMessage(chatId, `✅ **Bet Placed Successfully!**
 
 **Market:** ${session.question}
 **Option:** ${session.optionName}
 **Amount:** ${amount} USDC
-**Transaction:** Confirmed
+**Transaction:** [View on BaseScan](https://basescan.org/tx/${receipt.hash})
 
-🎉 Your bet is now active! You can track it in "My Positions".
+🎉 Your bet is now active and recorded on the blockchain!
+You can view it on both the bot and website.
 
 Good luck with your prediction!`, {
       parse_mode: 'Markdown',
@@ -1411,7 +1684,34 @@ Good luck with your prediction!`, {
         [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
       ])
     });
-  }, 3000);
+
+  } catch (error) {
+    console.error('Error placing bet:', error);
+    
+    let errorMessage = 'Unknown error occurred';
+    if (error.message.includes('insufficient funds')) {
+      errorMessage = 'Insufficient USDC balance';
+    } else if (error.message.includes('Market already resolved')) {
+      errorMessage = 'Market has already been resolved';
+    } else if (error.message.includes('Market has ended')) {
+      errorMessage = 'Market betting period has ended';
+    } else if (error.message.includes('user rejected')) {
+      errorMessage = 'Transaction was rejected';
+    } else {
+      errorMessage = error.message;
+    }
+
+    await bot.sendMessage(chatId, `❌ **Bet Failed**
+
+Error: ${errorMessage}
+
+Please try again or contact support if the issue persists.`, {
+      ...createInlineKeyboard([
+        [{ text: '🔄 Try Again', callback_data: `bet_${session.shortId}_${session.outcome}` }],
+        [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+      ])
+    });
+  }
 
   userSessions.delete(chatId);
 }
