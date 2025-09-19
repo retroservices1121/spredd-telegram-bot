@@ -436,7 +436,7 @@ async function getUserSpreddWallet(userId) {
     const { data: wallet } = await supabaseAdmin
       .from('bot_wallets')
       .select('*')
-      .eq('userId', user.id)
+      .eq('user_id', user.id)
       .single();
 
     if (!wallet) return null;
@@ -1399,8 +1399,6 @@ async function handleConfirmCreateMarket(chatId, userId) {
     // Clean up session
     userSessions.delete(chatId);
 
-    await bot.editMessageText(`🎉 **Market Created Successfully!**
-
     if (createdMarket) {
   const outcomes = [
     {
@@ -1425,6 +1423,8 @@ async function handleConfirmCreateMarket(chatId, userId) {
     console.error('Error creating outcomes:', outcomeError);
   }
 }
+    
+    await bot.editMessageText(`🎉 **Market Created Successfully!**
 
 **Question:** ${session.question}
 **Options:** ${session.optionA} vs ${session.optionB}
@@ -1777,7 +1777,7 @@ async function handlePlaceBetMessage(chatId, userId, msg, session) {
     const betData = {
       amount: amount,
       userId: user.id,
-      outcomeId: session.outcome ? 1 : 2, // Assuming outcome IDs 1 and 2 for A and B
+      outcomeId: session.outcomeId ? 1 : 2, // Assuming outcome IDs 1 and 2 for A and B
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -1883,7 +1883,7 @@ async function handleMyPositions(chatId, userId) {
           resolutionDate
         )
       `)
-      .eq('user_id', user.id)
+      .eq('userId', user.id)
       .order('createdAt', { ascending: false })
       .limit(10);
 
@@ -1893,7 +1893,7 @@ async function handleMyPositions(chatId, userId) {
       return;
     }
 
-    if (!bets || trades.length === 0) {
+    if (!trades || trades.length === 0) {
       await bot.sendMessage(chatId, `📊 **My Positions**
 
 You haven't placed any bets yet.
@@ -2017,9 +2017,6 @@ async function handleMarketStats(chatId) {
 
     const totalVolume = totalTrades?.reduce((sum, trade) => sum + parseFloat(trade.amount || 0), 0) || 0;
     const avgBetSize = totalTrades?.length ? (totalVolume / totalTrades.length).toFixed(2) : 0;
-
-    // Update the display text:
-     **Total Trades:** ${totalTrades?.length || 0}
 
     // Get FP Manager status
     const fpStatus = await getFPManagerWeekStatus();
