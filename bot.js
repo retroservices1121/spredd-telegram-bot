@@ -958,8 +958,8 @@ async function handleBrowseMarketsOptimized(chatId, userId) {
     let { data: markets, error } = await supabase
       .from('Market')
       .select('*')
-      .eq('resolved', false)
-      .order('created_at', { ascending: false })
+      .eq('isResolved', false)
+      .order('createdAt', { ascending: false })
       .limit(10);
 
     if (error) {
@@ -1002,17 +1002,17 @@ async function handleBrowseMarketsOptimized(chatId, userId) {
         ...market,
         marketId: market.market_id,
         question: market.question || 'Unknown Question',
-        optionA: market.option_a || 'Option A',
-        optionB: market.option_b || 'Option B',
-        endTime: market.end_time,
+        optionA: market.optionA || 'Option A',
+        optionB: market.optionB || 'Option B',
+        endTime: market.resolutionDate,
         image: market.image,
         tags: market.tags
       });
 
       // Format end time
-      let timeDisplay = 'No end time';
-      if (market.end_time) {
-        const endTime = new Date(market.end_time);
+      let timeDisplay = 'No resolution date';
+      if (market.resolutionDate) {
+        const endTime = new Date(market.resolutionDate);
         const now = new Date();
         const timeDiff = endTime.getTime() - now.getTime();
         const daysLeft = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
@@ -1374,13 +1374,14 @@ async function handleConfirmCreateMarket(chatId, userId) {
     const marketData = {
       market_id: marketId || `manual_${Date.now()}`,
       question: session.question,
-      option_a: session.optionA,
-      option_b: session.optionB,
-      end_time: new Date(endTime * 1000).toISOString(),
+      optionA: session.optionA,
+      optionB: session.optionB,
+      resolutionDate: resolutionDate.toISOString(),
       creator_id: user.id,
-      resolved: false,
+      isResolved: false,
       outcome: null,
-      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       image: session.image,
       tags: session.tags
     };
@@ -1399,6 +1400,31 @@ async function handleConfirmCreateMarket(chatId, userId) {
     userSessions.delete(chatId);
 
     await bot.editMessageText(`🎉 **Market Created Successfully!**
+
+    if (createdMarket) {
+  const outcomes = [
+    {
+      marketId: createdMarket.id,
+      outcome_title: session.optionA,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      marketId: createdMarket.id, 
+      outcome_title: session.optionB,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+  ];
+
+  const { error: outcomeError } = await supabase
+    .from('Outcome')
+    .insert(outcomes);
+
+  if (outcomeError) {
+    console.error('Error creating outcomes:', outcomeError);
+  }
+}
 
 **Question:** ${session.question}
 **Options:** ${session.optionA} vs ${session.optionB}
@@ -1516,14 +1542,30 @@ Please deposit USDC to your wallet and try again.`, {
       return;
     }
 
+    const { data: outcomes } = await supabase
+  .from('Outcome')
+  .select('id, outcome_title')
+  .eq('marketId', marketData.marketId);
+
+const selectedOutcome = outcomes?.find(outcome => 
+  (option === 'A' && outcome.outcome_title === marketData.optionA) ||
+  (option === 'B' && outcome.outcome_title === marketData.optionB)
+);
+
+if (!selectedOutcome) {
+  await bot.sendMessage(chatId, '❌ Error: Could not find outcome for this market.');
+  return;
+}
+
+    
     // Store bet session
     userSessions.set(chatId, {
       action: 'place_bet',
       marketKey: marketKey,
       marketData: marketData,
       option: option,
-      optionName: option === 'A' ? marketData.optionA : marketData.optionB,
-      outcome: option === 'A',
+      optionName: selectedOutcome.outcome_title,
+       outcomeId: selectedOutcome.id, // Use the actual outcome ID
       timestamp: Date.now()
     });
 
@@ -1733,15 +1775,15 @@ async function handlePlaceBetMessage(chatId, userId, msg, session) {
     // Save bet to database
     const user = await getOrCreateUserOptimized(userId);
     const betData = {
+      amount: amount,
       user_id: user.id,
-      market_id: session.marketData.marketId,
-      bet_amount: amount,
-      bet_on_a: session.outcome,
-      created_at: new Date().toISOString()
+      outcomeId: session.outcome ? 1 : 2, // Assuming outcome IDs 1 and 2 for A and B
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
     const { error: betError } = await supabase
-      .from('Bet')
+      .from('Trade')
       .insert([betData]);
 
     if (betError) {
@@ -1825,21 +1867,24 @@ async function handleMyPositions(chatId, userId) {
   try {
     const user = await getOrCreateUserOptimized(userId);
     
-    const { data: bets, error } = await supabase
-      .from('Bet')
+    const { data: trades, error } = await supabase
+      .from('Trade')
       .select(`
         *,
+        Outcome!inner(
+          marketId,
+          outcome_title,
         Market!inner(
           question,
-          option_a,
-          option_b,
-          resolved,
+          optionA,
+          optionB,
+          isResolved,
           outcome,
-          end_time
+          resolutionDate
         )
       `)
       .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
+      .order('createdAt', { ascending: false })
       .limit(10);
 
     if (error) {
@@ -1866,14 +1911,14 @@ Start by browsing markets and placing your first bet!`, {
     let positionsText = `📊 **My Positions** (${bets.length} total)\n\n`;
     
     for (const bet of bets) {
-      const market = bet.Market;
-      const option = bet.bet_on_a ? market.option_a : market.option_b;
+      const market = trade.Outcome.Market;
+      const option = trade.Outcome.outcome_title;
       const status = market.resolved ? 
-        (market.outcome === bet.bet_on_a ? '✅ Won' : '❌ Lost') : 
+        (market.outcome === trade.outcomeId ? '✅ Won' : '❌ Lost') : 
         '⏳ Active';
       
       positionsText += `**${market.question.slice(0, 50)}${market.question.length > 50 ? '...' : ''}**\n`;
-      positionsText += `Bet: ${bet.bet_amount} USDC on "${option}"\n`;
+      positionsText += `Bet: ${trade.amount} USDC on "${option}"\n`;
       positionsText += `Status: ${status}\n\n`;
     }
 
@@ -1896,13 +1941,13 @@ async function handleLeaderboard(chatId) {
   try {
     // Get top users by bet volume
     const { data: topUsers, error } = await supabase
-      .from('Bet')
+      .from('Trade')
       .select(`
-        user_id,
+        userId,
         User!inner(username),
-        bet_amount
+        amount
       `)
-      .order('bet_amount', { ascending: false })
+      .order('amount', { ascending: false })
       .limit(10);
 
     if (error) {
@@ -1913,15 +1958,15 @@ async function handleLeaderboard(chatId) {
 
     // Aggregate by user
     const userTotals = {};
-    for (const bet of topUsers || []) {
-      const userId = bet.user_id;
+    for (const trade of topUsers || []) {
+      const userId = trade.userId;
       if (!userTotals[userId]) {
         userTotals[userId] = {
-          username: bet.User.username,
+          username: trade.User.username,
           total: 0
         };
       }
-      userTotals[userId].total += parseFloat(bet.bet_amount);
+      userTotals[userId].total += parseFloat(trade.amount);
     }
 
     // Sort by total
@@ -1964,14 +2009,17 @@ async function handleMarketStats(chatId) {
     const { data: activeMarkets } = await supabase
       .from('Market')
       .select('id', { count: 'exact', head: true })
-      .eq('resolved', false);
+      .eq('isResolved', false);
 
-    const { data: totalBets } = await supabase
-      .from('Bet')
-      .select('bet_amount');
+    const { data: totalTrades } = await supabase
+      .from('Trade')
+      .select('amount');
 
-    const totalVolume = totalBets?.reduce((sum, bet) => sum + parseFloat(bet.bet_amount || 0), 0) || 0;
-    const avgBetSize = totalBets?.length ? (totalVolume / totalBets.length).toFixed(2) : 0;
+    const totalVolume = totalTrades?.reduce((sum, trade) => sum + parseFloat(trade.amount || 0), 0) || 0;
+    const avgBetSize = totalTrades?.length ? (totalVolume / totalTrades.length).toFixed(2) : 0;
+
+    // Update the display text:
+     **Total Trades:** ${totalTrades?.length || 0}
 
     // Get FP Manager status
     const fpStatus = await getFPManagerWeekStatus();
