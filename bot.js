@@ -436,7 +436,7 @@ async function getUserSpreddWallet(userId) {
     const { data: wallet } = await supabaseAdmin
       .from('bot_wallets')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('userId', user.id)
       .single();
 
     if (!wallet) return null;
@@ -1000,7 +1000,7 @@ async function handleBrowseMarketsOptimized(chatId, userId) {
       const marketKey = `market_${marketCounter}`;
       marketMappings.set(marketKey, {
         ...market,
-        marketId: market.market_id,
+        marketId: market.marketId,
         question: market.question || 'Unknown Question',
         optionA: market.optionA || 'Option A',
         optionB: market.optionB || 'Option B',
@@ -1372,12 +1372,12 @@ async function handleConfirmCreateMarket(chatId, userId) {
 
     // Save market to database with image and tags
     const marketData = {
-      market_id: marketId || `manual_${Date.now()}`,
+      marketId: marketId || `manual_${Date.now()}`,
       question: session.question,
       optionA: session.optionA,
       optionB: session.optionB,
       resolutionDate: resolutionDate.toISOString(),
-      creator_id: user.id,
+      creatorId: user.id,
       isResolved: false,
       outcome: null,
       createdAt: new Date().toISOString(),
@@ -1776,7 +1776,7 @@ async function handlePlaceBetMessage(chatId, userId, msg, session) {
     const user = await getOrCreateUserOptimized(userId);
     const betData = {
       amount: amount,
-      user_id: user.id,
+      userId: user.id,
       outcomeId: session.outcome ? 1 : 2, // Assuming outcome IDs 1 and 2 for A and B
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1893,7 +1893,7 @@ async function handleMyPositions(chatId, userId) {
       return;
     }
 
-    if (!bets || bets.length === 0) {
+    if (!bets || trades.length === 0) {
       await bot.sendMessage(chatId, `📊 **My Positions**
 
 You haven't placed any bets yet.
@@ -1908,9 +1908,9 @@ Start by browsing markets and placing your first bet!`, {
       return;
     }
 
-    let positionsText = `📊 **My Positions** (${bets.length} total)\n\n`;
+    let positionsText = `📊 **My Positions** (${trades.length} total)\n\n`;
     
-    for (const bet of bets) {
+    for (const trade of trades) {
       const market = trade.Outcome.Market;
       const option = trade.Outcome.outcome_title;
       const status = market.resolved ? 
@@ -2028,7 +2028,7 @@ async function handleMarketStats(chatId) {
 
 **Total Markets:** ${marketCount?.count || 0}
 **Active Markets:** ${activeMarkets?.count || 0}
-**Total Bets:** ${totalBets?.length || 0}
+**Total Bets:** ${totalTrades?.length || 0}
 **Total Volume:** ${totalVolume.toFixed(2)} USDC
 **Average Bet:** ${avgBetSize} USDC
 
@@ -2192,7 +2192,7 @@ bot.onText(/\/stats/, async (msg) => {
       .select('id', { count: 'exact', head: true });
 
     const { data: betCount } = await supabase
-      .from('Bet')
+      .from('Trade')
       .select('id', { count: 'exact', head: true });
 
     await bot.sendMessage(chatId, `📊 **Bot Statistics**
