@@ -330,7 +330,7 @@ async function getPendingWeeks() {
   }
 }
 
-// bot.js - PART 2/3: Core Functions and User Management
+// bot.js - PART 2/3: Core Functions and User Management - FIXED
 
 // Optimized user creation function
 async function getOrCreateUserOptimized(telegramId, username = null) {
@@ -384,7 +384,7 @@ async function getOrCreateUserOptimized(telegramId, username = null) {
   }
 }
 
-// Wallet functions
+// Wallet functions - FIXED user_id to userId
 async function createSpreddWallet(userId) {
   try {
     console.log(`Creating wallet for user ID: ${userId}`);
@@ -392,7 +392,7 @@ async function createSpreddWallet(userId) {
     console.log(`Generated wallet address: ${wallet.address}`);
     
     const walletData = {
-      user_id: userId,
+      userId: userId,  // FIXED: Changed from user_id
       address: wallet.address,
       encrypted_private_key: encrypt(wallet.privateKey),
       created_at: new Date().toISOString()
@@ -436,7 +436,7 @@ async function getUserSpreddWallet(userId) {
     const { data: wallet } = await supabaseAdmin
       .from('bot_wallets')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('userId', user.id)  // Using userId consistently
       .single();
 
     if (!wallet) return null;
@@ -944,7 +944,7 @@ Send the address or use /cancel to abort.`, {
   }
 }
 
-// bot.js - PART 3/3: Market Functions, Message Handlers, and Bot Completion - VERSION 10
+// bot.js - PART 3/3: Market Functions, Message Handlers, and Bot Completion - VERSION 10 FIXED
 // Features: Image Upload, Tags Selection, ETH Balance Integration, Performance Optimizations
 
 // OPTIMIZED BROWSE MARKETS - DATABASE ONLY
@@ -954,7 +954,7 @@ async function handleBrowseMarketsOptimized(chatId, userId) {
     
     const loadingMsg = await bot.sendMessage(chatId, '🔄 Loading markets...');
     
-    // Query database for active markets
+    // Query database for active markets - FIXED: using correct column names
     let { data: markets, error } = await supabase
       .from('Market')
       .select('*')
@@ -993,7 +993,7 @@ async function handleBrowseMarketsOptimized(chatId, userId) {
 
     console.log(`✅ Found ${markets.length} markets in database`);
 
-    // Create market buttons with database info
+    // Create market buttons with database info - FIXED: using correct column names
     const marketButtons = [];
     for (const market of markets.slice(0, 8)) { // Limit to 8 for UI
       marketCounter++;
@@ -1009,7 +1009,7 @@ async function handleBrowseMarketsOptimized(chatId, userId) {
         tags: market.tags
       });
 
-      // Format end time
+      // Format end time - FIXED: using resolutionDate
       let timeDisplay = 'No resolution date';
       if (market.resolutionDate) {
         const endTime = new Date(market.resolutionDate);
@@ -1308,7 +1308,7 @@ Ready to create this market?`;
   }
 }
 
-// CONFIRM CREATE MARKET
+// CONFIRM CREATE MARKET - FIXED: All database schema issues
 async function handleConfirmCreateMarket(chatId, userId) {
   try {
     const session = userSessions.get(chatId);
@@ -1370,7 +1370,8 @@ async function handleConfirmCreateMarket(chatId, userId) {
       marketId = decoded.args.marketId;
     }
 
-    // Save market to database with image and tags
+    // FIXED: Add missing variable declaration and use correct column names
+    const resolutionDate = new Date(endTime * 1000);
     const marketData = {
       marketId: marketId || `manual_${Date.now()}`,
       question: session.question,
@@ -1399,30 +1400,31 @@ async function handleConfirmCreateMarket(chatId, userId) {
     // Clean up session
     userSessions.delete(chatId);
 
+    // FIXED: Create outcomes after market creation
     if (createdMarket) {
-  const outcomes = [
-    {
-      marketId: createdMarket.id,
-      outcome_title: session.optionA,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    },
-    {
-      marketId: createdMarket.id, 
-      outcome_title: session.optionB,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      const outcomes = [
+        {
+          marketId: createdMarket.id,
+          outcome_title: session.optionA,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        {
+          marketId: createdMarket.id, 
+          outcome_title: session.optionB,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ];
+
+      const { error: outcomeError } = await supabase
+        .from('Outcome')
+        .insert(outcomes);
+
+      if (outcomeError) {
+        console.error('Error creating outcomes:', outcomeError);
+      }
     }
-  ];
-
-  const { error: outcomeError } = await supabase
-    .from('Outcome')
-    .insert(outcomes);
-
-  if (outcomeError) {
-    console.error('Error creating outcomes:', outcomeError);
-  }
-}
     
     await bot.editMessageText(`🎉 **Market Created Successfully!**
 
@@ -1477,7 +1479,7 @@ async function handleCancelCreateMarket(chatId) {
   });
 }
 
-// BET ACTION HANDLER
+// BET ACTION HANDLER - FIXED: Get proper outcome IDs
 async function handleBetAction(chatId, userId, data) {
   try {
     const [, marketKey, option] = data.split('_');
@@ -1542,30 +1544,30 @@ Please deposit USDC to your wallet and try again.`, {
       return;
     }
 
+    // FIXED: Get the correct outcome ID for this market and option
     const { data: outcomes } = await supabase
-  .from('Outcome')
-  .select('id, outcome_title')
-  .eq('marketId', marketData.marketId);
+      .from('Outcome')
+      .select('id, outcome_title')
+      .eq('marketId', marketData.id);
 
-const selectedOutcome = outcomes?.find(outcome => 
-  (option === 'A' && outcome.outcome_title === marketData.optionA) ||
-  (option === 'B' && outcome.outcome_title === marketData.optionB)
-);
+    const selectedOutcome = outcomes?.find(outcome => 
+      (option === 'A' && outcome.outcome_title === marketData.optionA) ||
+      (option === 'B' && outcome.outcome_title === marketData.optionB)
+    );
 
-if (!selectedOutcome) {
-  await bot.sendMessage(chatId, '❌ Error: Could not find outcome for this market.');
-  return;
-}
-
+    if (!selectedOutcome) {
+      await bot.sendMessage(chatId, '❌ Error: Could not find outcome for this market.');
+      return;
+    }
     
-    // Store bet session
+    // FIXED: Store bet session with correct outcome ID
     userSessions.set(chatId, {
       action: 'place_bet',
       marketKey: marketKey,
       marketData: marketData,
       option: option,
       optionName: selectedOutcome.outcome_title,
-       outcomeId: selectedOutcome.id, // Use the actual outcome ID
+      outcomeId: selectedOutcome.id, // Use the actual outcome ID
       timestamp: Date.now()
     });
 
@@ -1736,7 +1738,7 @@ Now select a category for your market:`, {
   }
 });
 
-// PLACE BET MESSAGE HANDLER
+// PLACE BET MESSAGE HANDLER - FIXED: Use correct outcome ID
 async function handlePlaceBetMessage(chatId, userId, msg, session) {
   const amount = parseFloat(msg.text.trim());
   
@@ -1761,7 +1763,7 @@ async function handlePlaceBetMessage(chatId, userId, msg, session) {
     const amountWei = ethers.parseUnits(amount.toString(), 6);
 
     // This would connect to the actual market contract
-    console.log(`Placing bet: ${amount} USDC on ${session.optionName} (betOnA: ${session.outcome})`);
+    console.log(`Placing bet: ${amount} USDC on ${session.optionName} (outcomeId: ${session.outcomeId})`);
 
     // For now, we'll simulate the bet placement
     // In production, this would interact with the actual market contract
@@ -1772,12 +1774,12 @@ async function handlePlaceBetMessage(chatId, userId, msg, session) {
 
     await betTx.wait();
 
-    // Save bet to database
+    // FIXED: Save bet to database using Trade table with correct column names
     const user = await getOrCreateUserOptimized(userId);
     const betData = {
       amount: amount,
       userId: user.id,
-      outcomeId: session.outcomeId ? 1 : 2, // Assuming outcome IDs 1 and 2 for A and B
+      outcomeId: session.outcomeId, // FIXED: Use the actual outcome ID from the session
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -1862,11 +1864,12 @@ Which asset would you like to withdraw?`, {
   });
 }
 
-// ADDITIONAL HANDLERS
+// ADDITIONAL HANDLERS - FIXED: Use Trade table and correct column names
 async function handleMyPositions(chatId, userId) {
   try {
     const user = await getOrCreateUserOptimized(userId);
     
+    // FIXED: Changed from 'Bet' to 'Trade' table with correct relationships
     const { data: trades, error } = await supabase
       .from('Trade')
       .select(`
@@ -1874,13 +1877,14 @@ async function handleMyPositions(chatId, userId) {
         Outcome!inner(
           marketId,
           outcome_title,
-        Market!inner(
-          question,
-          optionA,
-          optionB,
-          isResolved,
-          outcome,
-          resolutionDate
+          Market!inner(
+            question,
+            optionA,
+            optionB,
+            isResolved,
+            outcome,
+            resolutionDate
+          )
         )
       `)
       .eq('userId', user.id)
@@ -1893,6 +1897,7 @@ async function handleMyPositions(chatId, userId) {
       return;
     }
 
+    // FIXED: Changed variable name from 'bets' to 'trades'
     if (!trades || trades.length === 0) {
       await bot.sendMessage(chatId, `📊 **My Positions**
 
@@ -1908,12 +1913,13 @@ Start by browsing markets and placing your first bet!`, {
       return;
     }
 
+    // FIXED: Use 'trades' instead of 'bets' and correct column names
     let positionsText = `📊 **My Positions** (${trades.length} total)\n\n`;
     
     for (const trade of trades) {
       const market = trade.Outcome.Market;
       const option = trade.Outcome.outcome_title;
-      const status = market.resolved ? 
+      const status = market.isResolved ? 
         (market.outcome === trade.outcomeId ? '✅ Won' : '❌ Lost') : 
         '⏳ Active';
       
@@ -1939,7 +1945,7 @@ Start by browsing markets and placing your first bet!`, {
 
 async function handleLeaderboard(chatId) {
   try {
-    // Get top users by bet volume
+    // FIXED: Get top users by trade volume from Trade table
     const { data: topUsers, error } = await supabase
       .from('Trade')
       .select(`
@@ -1956,7 +1962,7 @@ async function handleLeaderboard(chatId) {
       return;
     }
 
-    // Aggregate by user
+    // FIXED: Aggregate by user using correct column names
     const userTotals = {};
     for (const trade of topUsers || []) {
       const userId = trade.userId;
@@ -2006,11 +2012,13 @@ async function handleMarketStats(chatId) {
       .from('Market')
       .select('id', { count: 'exact', head: true });
 
+    // FIXED: Use correct column name 'isResolved'
     const { data: activeMarkets } = await supabase
       .from('Market')
       .select('id', { count: 'exact', head: true })
       .eq('isResolved', false);
 
+    // FIXED: Use Trade table instead of Bet table
     const { data: totalTrades } = await supabase
       .from('Trade')
       .select('amount');
@@ -2025,7 +2033,7 @@ async function handleMarketStats(chatId) {
 
 **Total Markets:** ${marketCount?.count || 0}
 **Active Markets:** ${activeMarkets?.count || 0}
-**Total Bets:** ${totalTrades?.length || 0}
+**Total Trades:** ${totalTrades?.length || 0}
 **Total Volume:** ${totalVolume.toFixed(2)} USDC
 **Average Bet:** ${avgBetSize} USDC
 
@@ -2188,7 +2196,8 @@ bot.onText(/\/stats/, async (msg) => {
       .from('Market')
       .select('id', { count: 'exact', head: true });
 
-    const { data: betCount } = await supabase
+    // FIXED: Use Trade table instead of Bet table
+    const { data: tradeCount } = await supabase
       .from('Trade')
       .select('id', { count: 'exact', head: true });
 
@@ -2196,7 +2205,7 @@ bot.onText(/\/stats/, async (msg) => {
 
 **Users:** ${userCount?.count || 0}
 **Markets:** ${marketCount?.count || 0} 
-**Total Bets:** ${betCount?.count || 0}
+**Total Trades:** ${tradeCount?.count || 0}
 **Active Sessions:** ${userSessions.size}
 **Market Mappings:** ${marketMappings.size}
 **Memory Usage:** ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
