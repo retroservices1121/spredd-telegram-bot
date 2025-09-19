@@ -392,7 +392,7 @@ async function createSpreddWallet(userId) {
     console.log(`Generated wallet address: ${wallet.address}`);
     
     const walletData = {
-      userId: userId,  // FIXED: Changed from user_id
+      user_id: userId,   // FIXED: Use snake_case to match database schema
       address: wallet.address,
       encrypted_private_key: encrypt(wallet.privateKey),
       created_at: new Date().toISOString()
@@ -436,7 +436,7 @@ async function getUserSpreddWallet(userId) {
     const { data: wallet } = await supabaseAdmin
       .from('bot_wallets')
       .select('*')
-      .eq('userId', user.id)  // Using userId consistently
+      .eq('user_id', user.id)  // FIXED: Use snake_case to match database schema
       .single();
 
     if (!wallet) return null;
