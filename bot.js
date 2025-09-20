@@ -1,4 +1,4 @@
-// bot.js - Spredd Markets Bot - Part 1/8: Setup and Configuration
+// bot.js - Spredd Markets Bot - Part 1/10: Setup and Configuration
 
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
@@ -165,7 +165,7 @@ function updateContracts() {
   fpManagerContract = new ethers.Contract(FP_MANAGER_ADDRESS, FP_MANAGER_ABI, provider);
 }
 
-// bot.js - Part 2/8: Database and Bot Initialization
+// bot.js - Part 2/10: Database and Bot Initialization
 
 // Initialize Supabase clients with both anon and service role keys
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
@@ -295,6 +295,8 @@ function createCategoryButtons() {
   return buttons;
 }
 
+// bot.js - Part 3/10: Utility and Helper Functions
+
 // Date/Time utility functions to properly handle expiry timestamps
 function formatDateTime(timestamp) {
   if (!timestamp) return 'No date set';
@@ -394,7 +396,90 @@ function parseUserDate(input) {
   return targetDate;
 }
 
-// bot.js - Part 3/8: Wallet and Blockchain Functions
+// Safe message formatting to avoid Telegram parsing errors
+function safeMarkdown(text) {
+  if (!text) return '';
+  
+  // Replace problematic characters that cause Telegram parsing issues
+  return text
+    .replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')
+    .replace(/\n/g, '\n');
+}
+
+function createSafeMessage(text, options = {}) {
+  try {
+    // Test if the message would cause parsing errors
+    return {
+      text: text,
+      options: {
+        ...options,
+        parse_mode: 'Markdown'
+      }
+    };
+  } catch (error) {
+    // Fallback to plain text if markdown causes issues
+    console.warn('Markdown parsing failed, using plain text:', error.message);
+    return {
+      text: text.replace(/[*_`]/g, ''),
+      options: {
+        ...options,
+        parse_mode: undefined
+      }
+    };
+  }
+}
+
+// Enhanced message sending with error handling
+async function safeSendMessage(chatId, text, options = {}) {
+  try {
+    const safeMsg = createSafeMessage(text, options);
+    return await bot.sendMessage(chatId, safeMsg.text, safeMsg.options);
+  } catch (error) {
+    console.error('Error sending message:', error);
+    
+    // Try without markdown formatting
+    try {
+      const plainText = text.replace(/[*_`[\]]/g, '');
+      return await bot.sendMessage(chatId, plainText, {
+        ...options,
+        parse_mode: undefined
+      });
+    } catch (fallbackError) {
+      console.error('Fallback message also failed:', fallbackError);
+      throw fallbackError;
+    }
+  }
+}
+
+async function safeEditMessage(chatId, messageId, text, options = {}) {
+  try {
+    const safeMsg = createSafeMessage(text, options);
+    return await bot.editMessageText(safeMsg.text, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...safeMsg.options
+    });
+  } catch (error) {
+    console.error('Error editing message:', error);
+    
+    // Try without markdown formatting
+    try {
+      const plainText = text.replace(/[*_`[\]]/g, '');
+      return await bot.editMessageText(plainText, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...options,
+        parse_mode: undefined
+      });
+    } catch (fallbackError) {
+      console.error('Fallback edit also failed, sending new message:', fallbackError);
+      // Send new message as last resort
+      return await safeSendMessage(chatId, text, options);
+    }
+  }
+}
+
+// bot.js - Part 4/10: Blockchain and Wallet Functions
 
 // FP Manager helper functions
 async function getFPManagerWeekStatus() {
@@ -600,90 +685,7 @@ async function getMarketCreationFee() {
   }
 }
 
-// Safe message formatting to avoid Telegram parsing errors
-function safeMarkdown(text) {
-  if (!text) return '';
-  
-  // Replace problematic characters that cause Telegram parsing issues
-  return text
-    .replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')
-    .replace(/\n/g, '\n');
-}
-
-function createSafeMessage(text, options = {}) {
-  try {
-    // Test if the message would cause parsing errors
-    return {
-      text: text,
-      options: {
-        ...options,
-        parse_mode: 'Markdown'
-      }
-    };
-  } catch (error) {
-    // Fallback to plain text if markdown causes issues
-    console.warn('Markdown parsing failed, using plain text:', error.message);
-    return {
-      text: text.replace(/[*_`]/g, ''),
-      options: {
-        ...options,
-        parse_mode: undefined
-      }
-    };
-  }
-}
-
-// Enhanced message sending with error handling
-async function safeSendMessage(chatId, text, options = {}) {
-  try {
-    const safeMsg = createSafeMessage(text, options);
-    return await bot.sendMessage(chatId, safeMsg.text, safeMsg.options);
-  } catch (error) {
-    console.error('Error sending message:', error);
-    
-    // Try without markdown formatting
-    try {
-      const plainText = text.replace(/[*_`[\]]/g, '');
-      return await bot.sendMessage(chatId, plainText, {
-        ...options,
-        parse_mode: undefined
-      });
-    } catch (fallbackError) {
-      console.error('Fallback message also failed:', fallbackError);
-      throw fallbackError;
-    }
-  }
-}
-
-async function safeEditMessage(chatId, messageId, text, options = {}) {
-  try {
-    const safeMsg = createSafeMessage(text, options);
-    return await bot.editMessageText(safeMsg.text, {
-      chat_id: chatId,
-      message_id: messageId,
-      ...safeMsg.options
-    });
-  } catch (error) {
-    console.error('Error editing message:', error);
-    
-    // Try without markdown formatting
-    try {
-      const plainText = text.replace(/[*_`[\]]/g, '');
-      return await bot.editMessageText(plainText, {
-        chat_id: chatId,
-        message_id: messageId,
-        ...options,
-        parse_mode: undefined
-      });
-    } catch (fallbackError) {
-      console.error('Fallback edit also failed, sending new message:', fallbackError);
-      // Send new message as last resort
-      return await safeSendMessage(chatId, text, options);
-    }
-  }
-}
-
-// bot.js - Part 4/8: Bot Commands and Callback Handlers
+// bot.js - Part 5/10: Core Bot Commands and Handlers
 
 // START COMMAND - OPTIMIZED
 bot.onText(/\/start/, async (msg) => {
@@ -849,173 +851,384 @@ async function handleWalletMenu(chatId, messageId) {
   }
 }
 
-// bot.js - Part 4/8: Bot Commands and Callback Handlers
+// bot.js - Part 6/10: Browse Markets and Create Market Handlers
 
-// START COMMAND - OPTIMIZED
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  
+// BROWSE MARKETS HANDLER
+async function handleBrowseMarketsOptimized(chatId, userId) {
   try {
-    // Create user in background without waiting
-    getOrCreateUserOptimized(userId, msg.from.username).catch(error => {
-      console.error('Background user creation error:', error);
-    });
+    const { data: markets, error } = await dbClient
+      .from('Market')
+      .select(`
+        *,
+        User!inner(username),
+        Outcome(id, outcome_title)
+      `)
+      .eq('isResolved', false)
+      .order('createdAt', { ascending: false })
+      .limit(10);
 
-    const welcomeMessage = `🎯 **Welcome to Spredd Markets Bot!**
+    if (error) {
+      console.error('Error fetching markets:', error);
+      await safeSendMessage(chatId, '❌ Error loading markets. Please try again.');
+      return;
+    }
 
-Hello ${msg.from.first_name || 'there'}! 
+    if (!markets || markets.length === 0) {
+      await safeSendMessage(chatId, `🏪 **Browse Markets**
 
-This bot connects to Spredd Markets on Base blockchain:
-• Browse and bet on prediction markets with USDC
-• Create your own markets (3 USDC fee + ETH for gas)
-• Track your positions and winnings
-• Earn Forecast Points (FP) for trading
+No active markets available right now.
 
-**Network:** Base
-**Token:** USDC
-**Website:** ${WEBSITE_URL}
-
-${isAdmin(userId) ? '🔧 You have admin privileges! Use /admin for management.\n' : ''}
-
-Choose an option below to get started:`;
-
-    await safeSendMessage(chatId, welcomeMessage, mainMenu);
-
-  } catch (error) {
-    console.error('Error in /start command:', error);
-    await safeSendMessage(chatId, '❌ Welcome! There was a minor setup issue, but you can still use the bot.', mainMenu);
-  }
-});
-
-// CALLBACK QUERY HANDLER
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const userId = query.from.id;
-  const data = query.data;
-
-  console.log(`📞 Callback received: ${data} from user ${userId}`);
-
-  try {
-    await Promise.race([
-      bot.answerCallbackQuery(query.id),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
-    ]);
-  } catch (error) {
-    console.error('❌ Failed to answer callback query:', error);
-  }
-
-  try {
-    await Promise.race([
-      handleCallbackWithTimeout(chatId, userId, data, query),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Handler timeout')), 30000))
-    ]);
-  } catch (error) {
-    console.error(`❌ Error processing callback ${data}:`, error);
-    
-    try {
-      await safeSendMessage(chatId, `❌ Operation timed out or failed. Please try again.\n\nError: ${error.message}`, {
+Be the first to create a market and start trading!`, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '⬅️ Back to Main Menu', callback_data: 'main_menu' }]
+            [{ text: '➕ Create Market', callback_data: 'create_market' }],
+            [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
           ]
         }
       });
-    } catch (sendError) {
-      console.error('❌ Failed to send error message:', sendError);
+      return;
     }
+
+    let marketText = `🏪 **Active Markets** (${markets.length} available)\n\n`;
+    const marketButtons = [];
+
+    for (let i = 0; i < markets.length; i++) {
+      const market = markets[i];
+      const marketKey = `market_${i + 1}`;
+      
+      // Store market mapping
+      marketMappings.set(marketKey, {
+        id: market.id,
+        marketId: market.marketId,
+        question: market.question,
+        optionA: market.optionA,
+        optionB: market.optionB,
+        expiry: market.expiry,
+        creator: market.User.username,
+        outcomes: market.Outcome
+      });
+
+      const timeLeft = formatDateTime(market.expiry);
+      marketText += `**${i + 1}.** ${market.question.slice(0, 60)}${market.question.length > 60 ? '...' : ''}\n`;
+      marketText += `**Options:** ${market.optionA} vs ${market.optionB}\n`;
+      marketText += `**Creator:** ${market.User.username}\n`;
+      marketText += `**Expires:** ${timeLeft}\n\n`;
+
+      marketButtons.push([{ 
+        text: `📊 Market ${i + 1}`, 
+        callback_data: marketKey 
+      }]);
+    }
+
+    marketButtons.push([
+      { text: '🔄 Refresh Markets', callback_data: 'browse_markets' },
+      { text: '➕ Create Market', callback_data: 'create_market' }
+    ]);
+    marketButtons.push([{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]);
+
+    await safeSendMessage(chatId, marketText, {
+      reply_markup: { inline_keyboard: marketButtons }
+    });
+
+  } catch (error) {
+    console.error('Error in handleBrowseMarketsOptimized:', error);
+    await safeSendMessage(chatId, '❌ Error loading markets. Please try again.');
+  }
+}
+
+// CREATE MARKET HANDLER
+async function handleCreateMarketOptimized(chatId, userId) {
+  try {
+    const wallet = await getUserSpreddWallet(userId);
+    
+    if (!wallet) {
+      await safeSendMessage(chatId, `➕ **Create Prediction Market**
+
+❌ You need a Spredd Wallet to create markets.
+
+A Spredd Wallet allows you to:
+• Create prediction markets (3 USDC fee)
+• Place bets with USDC
+• Manage your funds securely
+
+Create your wallet to get started!`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🆕 Create Spredd Wallet', callback_data: 'create_spredd_wallet' }],
+            [{ text: '❓ Wallet Info', callback_data: 'spredd_wallet_info' }],
+            [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    const [usdcBalance, ethBalance, creationFee] = await Promise.all([
+      getUSDCBalance(wallet.address),
+      getETHBalance(wallet.address),
+      getMarketCreationFee()
+    ]);
+
+    const hasEnoughUSDC = parseFloat(usdcBalance) >= parseFloat(creationFee);
+    const hasEnoughETH = parseFloat(ethBalance) > 0.001;
+
+    if (!hasEnoughUSDC || !hasEnoughETH) {
+      let errorMessage = `➕ **Create Prediction Market**
+
+❌ Insufficient funds to create a market.
+
+**Requirements:**
+• ${creationFee} USDC (creation fee)
+• 0.001+ ETH (gas fees)
+
+**Your Balance:**
+• ${usdcBalance} USDC ${hasEnoughUSDC ? '✅' : '❌'}
+• ${ethBalance} ETH ${hasEnoughETH ? '✅' : '❌'}
+
+Please fund your wallet and try again.`;
+
+      await safeSendMessage(chatId, errorMessage, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📥 Get Deposit Address', callback_data: 'deposit_address' }],
+            [{ text: '💰 Check Balance', callback_data: 'check_balance' }],
+            [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    // Start market creation flow
+    userSessions.set(chatId, {
+      action: 'create_market',
+      step: 1,
+      timestamp: Date.now()
+    });
+
+    await safeSendMessage(chatId, `➕ **Create Prediction Market**
+
+✅ **Your Balance:**
+• ${usdcBalance} USDC ✅
+• ${ethBalance} ETH ✅
+
+**Market Creation Cost:** ${creationFee} USDC + gas fees
+
+**Step 1 of 5:** Enter your prediction question.
+
+Example: "Will Bitcoin reach $100,000 by end of 2024?"
+
+Please type your question:
+
+Send /cancel to abort.`);
+
+  } catch (error) {
+    console.error('Error in handleCreateMarketOptimized:', error);
+    await safeSendMessage(chatId, '❌ Error starting market creation. Please try again.');
+  }
+}
+
+// MARKET ACTION HANDLER
+async function handleMarketActionOptimized(chatId, userId, data) {
+  try {
+    const marketKey = data;
+    const marketData = marketMappings.get(marketKey);
+    
+    if (!marketData) {
+      await safeSendMessage(chatId, '❌ Market not found. Please refresh the markets list.', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔄 Refresh Markets', callback_data: 'browse_markets' }],
+            [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    const isExpired = isMarketExpired(marketData.expiry);
+    const timeLeft = formatDateTime(marketData.expiry);
+
+    let marketMessage = `📊 **Market Details**
+
+**Question:** ${marketData.question}
+
+**Options:**
+🅰️ ${marketData.optionA}
+🅱️ ${marketData.optionB}
+
+**Creator:** ${marketData.creator}
+**Status:** ${isExpired ? '🔴 Expired' : '🟢 Active'}
+**Time Left:** ${timeLeft}
+
+${isExpired ? '⚠️ This market has expired and no longer accepts bets.' : '💰 Place your bet on the outcome you believe will happen!'}`;
+
+    const buttons = [];
+    
+    if (!isExpired) {
+      buttons.push([
+        { text: `🅰️ Bet on ${marketData.optionA}`, callback_data: `bet_${marketKey}_A` },
+        { text: `🅱️ Bet on ${marketData.optionB}`, callback_data: `bet_${marketKey}_B` }
+      ]);
+    }
+    
+    buttons.push([
+      { text: '🔄 Refresh', callback_data: marketKey },
+      { text: '🏪 All Markets', callback_data: 'browse_markets' }
+    ]);
+    buttons.push([{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]);
+
+    await safeSendMessage(chatId, marketMessage, {
+      reply_markup: { inline_keyboard: buttons }
+    });
+
+  } catch (error) {
+    console.error('Error in handleMarketActionOptimized:', error);
+    await safeSendMessage(chatId, '❌ Error loading market details. Please try again.');
+  }
+}
+
+// bot.js - Part 7/10: Message Handlers and Market Creation Flow
+
+// MESSAGE HANDLER FOR TEXT INPUTS
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const session = userSessions.get(chatId);
+
+  // Skip if it's a command or callback
+  if (!msg.text || msg.text.startsWith('/')) {
+    return;
+  }
+
+  if (!session) {
+    return;
+  }
+
+  try {
+    // Handle different session types
+    switch (session.action) {
+      case 'create_market':
+        await handleCreateMarketMessage(chatId, userId, msg, session);
+        break;
+      case 'place_bet':
+        await handlePlaceBetMessage(chatId, userId, msg, session);
+        break;
+      case 'withdraw':
+        await handleWithdrawMessage(chatId, userId, msg, session);
+        break;
+      default:
+        // Unknown session type
+        userSessions.delete(chatId);
+        break;
+    }
+  } catch (error) {
+    console.error('Error handling message:', error);
+    userSessions.delete(chatId);
+    await safeSendMessage(chatId, '❌ An error occurred. Please try again.');
   }
 });
 
-// CALLBACK HANDLER ROUTER
-async function handleCallbackWithTimeout(chatId, userId, data, query) {
-  switch (data) {
-    case 'main_menu':
-      await handleMainMenu(chatId, query.message.message_id);
-      break;
-    case 'browse_markets':
-      await handleBrowseMarketsOptimized(chatId, userId);
-      break;
-    case 'create_market':
-      await handleCreateMarketOptimized(chatId, userId);
-      break;
-    case 'wallet_menu':
-      await handleWalletMenu(chatId, query.message.message_id);
-      break;
-    case 'my_positions':
-      await handleMyPositions(chatId, userId);
-      break;
-    case 'leaderboard':
-      await handleLeaderboard(chatId);
-      break;
-    case 'market_stats':
-      await handleMarketStats(chatId);
-      break;
-    case 'create_spredd_wallet':
-      await handleCreateSpreddWallet(chatId, userId);
-      break;
-    case 'check_balance':
-      await handleCheckBalance(chatId, userId);
-      break;
-    case 'deposit_address':
-      await handleDepositAddress(chatId, userId);
-      break;
-    case 'withdraw_funds':
-      await handleWithdrawFunds(chatId, userId);
-      break;
-    case 'confirm_create_market':
-      await handleConfirmCreateMarket(chatId, userId);
-      break;
-    case 'cancel_create_market':
-      await handleCancelCreateMarket(chatId);
-      break;
-    case 'spredd_wallet_info':
-      await handleSpreddWalletInfo(chatId);
-      break;
-    case 'skip_tags':
-      await handleSkipTags(chatId, userId);
-      break;
-    case 'fp_status':
-      await handleFPStatus(chatId);
-      break;
-    default:
-      if (data.startsWith('market_')) {
-        await handleMarketActionOptimized(chatId, userId, data);
-      } else if (data.startsWith('bet_')) {
-        await handleBetAction(chatId, userId, data);
-      } else if (data.startsWith('tag_')) {
-        await handleTagSelection(chatId, userId, data);
-      } else {
-        await safeSendMessage(chatId, '❌ Unknown action. Please try again.', {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '⬅️ Back to Main Menu', callback_data: 'main_menu' }]
-            ]
-          }
+// CREATE MARKET MESSAGE HANDLER
+async function handleCreateMarketMessage(chatId, userId, msg, session) {
+  const text = msg.text.trim();
+
+  try {
+    switch (session.step) {
+      case 1: // Question
+        if (text.length < 10 || text.length > 200) {
+          await safeSendMessage(chatId, '❌ Question must be between 10-200 characters. Please try again:');
+          return;
+        }
+        session.question = text;
+        session.step = 2;
+        userSessions.set(chatId, session);
+        
+        await safeSendMessage(chatId, `✅ **Question Set:** ${text}
+
+**Step 2 of 5:** Enter Option A (first choice).
+
+Example: "Yes" or "Bitcoin reaches $100k"
+
+Please type Option A:`);
+        break;
+
+      case 2: // Option A
+        if (text.length < 2 || text.length > 50) {
+          await safeSendMessage(chatId, '❌ Option A must be between 2-50 characters. Please try again:');
+          return;
+        }
+        session.optionA = text;
+        session.step = 3;
+        userSessions.set(chatId, session);
+        
+        await safeSendMessage(chatId, `✅ **Option A Set:** ${text}
+
+**Step 3 of 5:** Enter Option B (second choice).
+
+Example: "No" or "Bitcoin stays below $100k"
+
+Please type Option B:`);
+        break;
+
+      case 3: // Option B
+        if (text.length < 2 || text.length > 50) {
+          await safeSendMessage(chatId, '❌ Option B must be between 2-50 characters. Please try again:');
+          return;
+        }
+        session.optionB = text;
+        session.step = 4;
+        userSessions.set(chatId, session);
+        
+        await safeSendMessage(chatId, `✅ **Option B Set:** ${text}
+
+**Step 4 of 5:** Set the market expiry date.
+
+You can use formats like:
+• "7 days" or "2 weeks"
+• "2024-12-31" 
+• "31/12/2024"
+• "January 15, 2025"
+
+Please enter the expiry date:`);
+        break;
+
+      case 4: // Expiry Date
+        const parsedDate = parseUserDate(text);
+        if (!parsedDate) {
+          await safeSendMessage(chatId, `❌ Invalid date format or date must be in the future.
+
+Please try formats like:
+• "7 days" or "2 weeks"
+• "2024-12-31"
+• "31/12/2024"
+
+Please enter a valid expiry date:`);
+          return;
+        }
+        
+        session.expiry = parsedDate.toISOString();
+        session.step = 5;
+        userSessions.set(chatId, session);
+        
+        await safeSendMessage(chatId, `✅ **Expiry Set:** ${formatDateTime(session.expiry)}
+
+**Step 5 of 5:** Upload an image (optional).
+
+You can:
+• Send an image now
+• Skip by selecting a category below
+
+Choose a category for your market:`, {
+          reply_markup: { inline_keyboard: createCategoryButtons() }
         });
-      }
-      break;
-  }
-}
-
-// HANDLER FUNCTIONS
-async function handleMainMenu(chatId, messageId) {
-  try {
-    await safeEditMessage(chatId, messageId, '🎯 **Spredd Markets Bot**\n\nChoose an option:', mainMenu);
+        break;
+    }
   } catch (error) {
-    await safeSendMessage(chatId, '🎯 **Spredd Markets Bot**\n\nChoose an option:', mainMenu);
+    console.error('Error in handleCreateMarketMessage:', error);
+    await safeSendMessage(chatId, '❌ Error processing your input. Please try again.');
   }
 }
-
-async function handleWalletMenu(chatId, messageId) {
-  try {
-    await safeEditMessage(chatId, messageId, '💰 **Spredd Wallet Management**\n\nManage your Spredd Wallet:', walletMenu);
-  } catch (error) {
-    await safeSendMessage(chatId, '💰 **Spredd Wallet Management**\n\nManage your Spredd Wallet:', walletMenu);
-  }
-}
-
-// bot.js - Part 6/8: Photo Handling, Tags, and Market Confirmation
 
 // HANDLE PHOTO MESSAGES
 bot.on('photo', async (msg) => {
@@ -1136,7 +1349,9 @@ Ready to create this market?`;
   }
 }
 
-// CONFIRM CREATE MARKET - FIXED TO NOT USE FP MANAGER DIRECTLY
+// bot.js - Part 8/10: Market Confirmation and Betting Functions
+
+// CONFIRM CREATE MARKET
 async function handleConfirmCreateMarket(chatId, userId) {
   try {
     const session = userSessions.get(chatId);
@@ -1163,7 +1378,7 @@ async function handleConfirmCreateMarket(chatId, userId) {
       const userWallet = new ethers.Wallet(wallet.privateKey, provider);
       const factoryWithSigner = factoryContract.connect(userWallet);
 
-      // Create market on blockchain (skip FP Manager for now)
+      // Create market on blockchain
       const createTx = await factoryWithSigner.createMarket(
         session.question,
         session.optionA,
@@ -1195,13 +1410,13 @@ async function handleConfirmCreateMarket(chatId, userId) {
         console.warn('Could not parse market ID from logs, using fallback');
       }
 
-      // Save to database using correct field names based on your table
+      // Save to database
       const marketData = {
         marketId: marketId,
         question: session.question,
         optionA: session.optionA,
         optionB: session.optionB,
-        expiry: session.expiry, // Use expiry field as shown in your table
+        expiry: session.expiry,
         creatorId: user.id,
         isResolved: false,
         outcome: null,
@@ -1219,7 +1434,6 @@ async function handleConfirmCreateMarket(chatId, userId) {
 
       if (dbError) {
         console.error('Database error:', dbError);
-        // Don't fail the entire operation if database save fails
       }
 
       userSessions.delete(chatId);
@@ -1276,7 +1490,6 @@ Your market is now live and available for betting!`;
     } catch (blockchainError) {
       console.error('Blockchain error:', blockchainError);
       
-      // Handle specific blockchain errors
       let errorMessage = 'Unknown blockchain error';
       if (blockchainError.message.includes('Week not active')) {
         errorMessage = 'Market creation is temporarily disabled. The system may be updating.';
@@ -1334,8 +1547,6 @@ async function handleCancelCreateMarket(chatId) {
     }
   });
 }
-
-// bot.js - Part 7/8: Betting, Positions, and Wallet Functions
 
 // BET ACTION HANDLER
 async function handleBetAction(chatId, userId, data) {
@@ -1532,6 +1743,8 @@ Your funds are safe. Please try again later.`, {
     });
   }
 }
+
+// bot.js - Part 9/10: Wallet Functions and Statistics
 
 // MY POSITIONS HANDLER
 async function handleMyPositions(chatId, userId) {
@@ -1860,8 +2073,6 @@ Which asset would you like to withdraw?`, {
   });
 }
 
-// bot.js - Part 8/8: Statistics, Admin Commands, and System Setup
-
 // LEADERBOARD HANDLER
 async function handleLeaderboard(chatId) {
   try {
@@ -1923,6 +2134,8 @@ async function handleLeaderboard(chatId) {
     await safeSendMessage(chatId, '❌ Error loading leaderboard. Please try again.');
   }
 }
+
+// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
 
 // MARKET STATS HANDLER
 async function handleMarketStats(chatId) {
@@ -2188,223 +2401,6 @@ bot.onText(/\/stats/, async (msg) => {
   }
 });
 
-bot.onText(/\/users/, async (msg) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  
-  try {
-    const { data: users, error } = await dbClient
-      .from('User')
-      .select('id, username, telegram_id, createdAt')
-      .order('createdAt', { ascending: false })
-      .limit(10);
-
-    if (error) throw error;
-
-    let userText = `👥 **Recent Users** (${users?.length || 0} shown)\n\n`;
-    
-    if (users && users.length > 0) {
-      users.forEach((user, index) => {
-        const joinDate = new Date(user.createdAt).toLocaleDateString();
-        userText += `${index + 1}. ${user.username} (ID: ${user.telegram_id})\n`;
-        userText += `   Joined: ${joinDate}\n\n`;
-      });
-    } else {
-      userText += 'No users found.';
-    }
-
-    await safeSendMessage(chatId, userText);
-
-  } catch (error) {
-    await safeSendMessage(chatId, `❌ Error fetching users: ${error.message}`);
-  }
-});
-
-bot.onText(/\/markets/, async (msg) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  
-  try {
-    const { data: markets, error } = await dbClient
-      .from('Market')
-      .select('id, question, creatorId, isResolved, createdAt')
-      .order('createdAt', { ascending: false })
-      .limit(10);
-
-    if (error) throw error;
-
-    let marketText = `📊 **Recent Markets** (${markets?.length || 0} shown)\n\n`;
-    
-    if (markets && markets.length > 0) {
-      markets.forEach((market, index) => {
-        const createDate = new Date(market.createdAt).toLocaleDateString();
-        const status = market.isResolved ? '🔴 Resolved' : '🟢 Active';
-        marketText += `${index + 1}. ${market.question.slice(0, 50)}${market.question.length > 50 ? '...' : ''}\n`;
-        marketText += `   Status: ${status} | Created: ${createDate}\n\n`;
-      });
-    } else {
-      marketText += 'No markets found.';
-    }
-
-    await safeSendMessage(chatId, marketText);
-
-  } catch (error) {
-    await safeSendMessage(chatId, `❌ Error fetching markets: ${error.message}`);
-  }
-});
-
-bot.onText(/\/fpstatus/, async (msg) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  
-  try {
-    const fpStatus = await getFPManagerWeekStatus();
-    const pendingWeeks = await getPendingWeeks();
-
-    if (!fpStatus) {
-      await safeSendMessage(chatId, '❌ Could not fetch FP Manager status.');
-      return;
-    }
-
-    const statusText = fpStatus.weekStatus === 0 ? 'ACTIVE' : 
-                      fpStatus.weekStatus === 1 ? 'PENDING_FINALIZE' : 'FINALIZED';
-
-    let fpText = `🏆 **FP Manager Status (Admin)**\n\n`;
-    fpText += `**Current Week:** ${fpStatus.currentWeek}\n`;
-    fpText += `**Status:** ${statusText}\n`;
-    fpText += `**Reward Pool:** ${fpStatus.currentRewardPool} USDC\n`;
-    fpText += `**Start Time:** ${new Date(Number(fpStatus.startTime) * 1000).toLocaleString()}\n`;
-    fpText += `**End Time:** ${new Date(Number(fpStatus.endTime) * 1000).toLocaleString()}\n\n`;
-
-    if (pendingWeeks.weeks.length > 0) {
-      fpText += `**Pending Weeks:** ${pendingWeeks.weeks.join(', ')}\n`;
-      fpText += `**Pending Rewards:** ${pendingWeeks.rewardPools.join(', ')} USDC\n`;
-    }
-
-    fpText += `\n**Contract:** ${FP_MANAGER_ADDRESS}`;
-
-    await safeSendMessage(chatId, fpText);
-
-  } catch (error) {
-    await safeSendMessage(chatId, `❌ Error fetching FP status: ${error.message}`);
-  }
-});
-
-// BROADCAST COMMAND (Admin only)
-bot.onText(/\/broadcast (.+)/, async (msg, match) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  const message = match[1];
-
-  try {
-    const { data: users, error } = await dbClient
-      .from('User')
-      .select('telegram_id');
-
-    if (error) throw error;
-
-    let sentCount = 0;
-    let failCount = 0;
-
-    await safeSendMessage(chatId, `📢 Starting broadcast to ${users?.length || 0} users...`);
-
-    for (const user of users || []) {
-      try {
-        await safeSendMessage(user.telegram_id, `📢 **Announcement**\n\n${message}`);
-        sentCount++;
-        
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-      } catch (error) {
-        failCount++;
-        console.error(`Failed to send to user ${user.telegram_id}:`, error.message);
-      }
-    }
-
-    await safeSendMessage(chatId, `✅ Broadcast complete!\n\n**Sent:** ${sentCount}\n**Failed:** ${failCount}`);
-
-  } catch (error) {
-    await safeSendMessage(chatId, `❌ Error broadcasting: ${error.message}`);
-  }
-});
-
-// SYSTEM HEALTH CHECK
-bot.onText(/\/health/, async (msg) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  
-  try {
-    const blockNumber = await retryRPCCallOptimized(async () => {
-      return await provider.getBlockNumber();
-    });
-
-    const { data: dbTest, error: dbError } = await dbClient
-      .from('User')
-      .select('id')
-      .limit(1);
-
-    const healthStatus = {
-      blockchain: blockNumber ? '✅ Connected' : '❌ Disconnected',
-      database: !dbError ? '✅ Connected' : '❌ Error',
-      memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
-      uptime: `${Math.round(process.uptime() / 3600)}h`,
-      activeRPC: RPC_PROVIDERS[currentProviderIndex],
-      blockNumber: blockNumber || 'Unknown'
-    };
-
-    const healthText = `🏥 **System Health Check**
-
-**Blockchain:** ${healthStatus.blockchain}
-**Block Number:** ${healthStatus.blockNumber}
-**Database:** ${healthStatus.database}
-**Memory Usage:** ${healthStatus.memory}
-**Uptime:** ${healthStatus.uptime}
-**RPC Provider:** ${healthStatus.activeRPC}
-
-**Active Sessions:** ${userSessions.size}
-**Market Mappings:** ${marketMappings.size}
-
-**Contracts:**
-• Factory: ${SPREDD_FACTORY_ADDRESS}
-• USDC: ${USDC_ADDRESS}
-• FP Manager: ${FP_MANAGER_ADDRESS}`;
-
-    await safeSendMessage(chatId, healthText);
-
-  } catch (error) {
-    await safeSendMessage(chatId, `❌ Health check failed: ${error.message}`);
-  }
-});
-
-// RESTART COMMAND (Emergency use)
-bot.onText(/\/restart/, async (msg) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  
-  await safeSendMessage(chatId, '⚠️ **Restarting bot...**\n\nThis will clear all active sessions and reconnect to services.');
-  
-  userSessions.clear();
-  marketMappings.clear();
-  marketCounter = 0;
-  
-  switchRPCProvider();
-  updateContracts();
-  
-  await safeSendMessage(chatId, '✅ **Bot restarted successfully!**\n\nAll sessions cleared and contracts updated.');
-});
-
 // CANCEL COMMAND
 bot.onText(/\/cancel/, async (msg) => {
   const chatId = msg.chat.id;
@@ -2552,11 +2548,11 @@ setTimeout(async () => {
 }, 3000);
 
 // BOT STARTUP
-console.log('🤖 Spredd Markets Bot v11 Starting...');
+console.log('🤖 Spredd Markets Bot v12 Starting...');
 console.log('🌐 Primary RPC: Alchemy Base Mainnet');
 console.log(`🏭 Factory: ${SPREDD_FACTORY_ADDRESS}`);
 console.log(`💰 USDC: ${USDC_ADDRESS}`);
 console.log(`🏆 FP Manager: ${FP_MANAGER_ADDRESS}`);
 console.log(`🔗 Website: ${WEBSITE_URL}`);
-console.log('✨ Features: Fixed Database Permissions, Timestamp Expiry, Safe Message Formatting, Error Handling');
+console.log('✨ Features: Complete Handler Functions, Fixed Database Permissions, Safe Message Formatting');
 console.log('✅ Bot is ready and listening for messages!');
