@@ -853,32 +853,72 @@ async function handleWalletMenu(chatId, messageId) {
 
 // bot.js - Part 6/10: Browse Markets and Create Market Handlers
 
-// BROWSE MARKETS HANDLER
+// BROWSE MARKETS HANDLER - UPDATED WITH BETTER ERROR HANDLING
 async function handleBrowseMarketsOptimized(chatId, userId) {
   try {
-    const { data: markets, error } = await dbClient
+    console.log('🔍 Attempting to fetch markets with supabaseAdmin...');
+    
+    // Use supabaseAdmin with a simpler query first to test permissions
+    const { data: markets, error } = await supabaseAdmin
       .from('Market')
-      .select(`
-        *,
-        User!inner(username),
-        Outcome(id, outcome_title)
-      `)
+      .select('*')
       .eq('isResolved', false)
       .order('createdAt', { ascending: false })
-      .limit(10);
+      .limit(5);
+
+    console.log('📊 Market query result:', { 
+      dataCount: markets?.length || 0, 
+      error: error ? error.message : 'none' 
+    });
 
     if (error) {
-      console.error('Error fetching markets:', error);
-      await safeSendMessage(chatId, '❌ Error loading markets. Please try again.');
+      console.error('❌ Database error details:', error);
+      
+      // If we still get permission errors, try a basic health check
+      const { data: healthCheck, error: healthError } = await supabaseAdmin
+        .from('User')
+        .select('id')
+        .limit(1);
+        
+      if (healthError) {
+        console.error('❌ Database connection issue:', healthError);
+        await safeSendMessage(chatId, `❌ Database connection issue: ${healthError.message}\n\nPlease check your Supabase service role key configuration.`);
+        return;
+      }
+      
+      await safeSendMessage(chatId, `❌ Error loading markets: ${error.message}\n\nTrying alternative approach...`);
+      
+      // Try with basic user data instead
+      await safeSendMessage(chatId, `🏪 **Browse Markets**
+
+Database is having permission issues. Please check:
+
+1. Supabase Service Role Key is correctly set
+2. RLS policies allow service role access
+3. Table permissions are configured
+
+Current status: Using service role key: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? 'YES' : 'NO'}`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
+            [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+          ]
+        }
+      });
       return;
     }
 
     if (!markets || markets.length === 0) {
       await safeSendMessage(chatId, `🏪 **Browse Markets**
 
-No active markets available right now.
+No active markets found in the database.
 
-Be the first to create a market and start trading!`, {
+This could mean:
+• No markets have been created yet
+• Markets exist but are marked as resolved
+• Database query returned empty results
+
+Be the first to create a market!`, {
         reply_markup: {
           inline_keyboard: [
             [{ text: '➕ Create Market', callback_data: 'create_market' }],
@@ -889,14 +929,31 @@ Be the first to create a market and start trading!`, {
       return;
     }
 
-    let marketText = `🏪 **Active Markets** (${markets.length} available)\n\n`;
+    // Get creator usernames separately to avoid complex joins
+    let marketText = `🏪 **Active Markets** (${markets.length} found)\n\n`;
     const marketButtons = [];
 
     for (let i = 0; i < markets.length; i++) {
       const market = markets[i];
       const marketKey = `market_${i + 1}`;
       
-      // Store market mapping
+      // Get creator username
+      let creatorName = 'Unknown';
+      try {
+        const { data: creator } = await supabaseAdmin
+          .from('User')
+          .select('username')
+          .eq('id', market.creatorId)
+          .single();
+        
+        if (creator) {
+          creatorName = creator.username;
+        }
+      } catch (creatorError) {
+        console.warn('Could not fetch creator name:', creatorError);
+      }
+      
+      // Store market mapping with simplified data
       marketMappings.set(marketKey, {
         id: market.id,
         marketId: market.marketId,
@@ -904,14 +961,14 @@ Be the first to create a market and start trading!`, {
         optionA: market.optionA,
         optionB: market.optionB,
         expiry: market.expiry,
-        creator: market.User.username,
-        outcomes: market.Outcome
+        creator: creatorName,
+        outcomes: [] // Will fetch separately if needed
       });
 
       const timeLeft = formatDateTime(market.expiry);
       marketText += `**${i + 1}.** ${market.question.slice(0, 60)}${market.question.length > 60 ? '...' : ''}\n`;
       marketText += `**Options:** ${market.optionA} vs ${market.optionB}\n`;
-      marketText += `**Creator:** ${market.User.username}\n`;
+      marketText += `**Creator:** ${creatorName}\n`;
       marketText += `**Expires:** ${timeLeft}\n\n`;
 
       marketButtons.push([{ 
@@ -930,9 +987,25 @@ Be the first to create a market and start trading!`, {
       reply_markup: { inline_keyboard: marketButtons }
     });
 
+    console.log('✅ Browse markets completed successfully');
+
   } catch (error) {
-    console.error('Error in handleBrowseMarketsOptimized:', error);
-    await safeSendMessage(chatId, '❌ Error loading markets. Please try again.');
+    console.error('❌ Critical error in handleBrowseMarketsOptimized:', error);
+    await safeSendMessage(chatId, `❌ Critical error: ${error.message}
+
+This might be a configuration issue. Please check:
+1. Environment variables are set correctly
+2. Supabase service role key has proper permissions
+3. Database tables exist and are accessible
+
+Error details: ${error.stack?.split('\n')[0] || 'Unknown'}`, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ]
+      }
+    });
   }
 }
 
@@ -2135,7 +2208,255 @@ async function handleLeaderboard(chatId) {
   }
 }
 
-// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
+bot.onText(/\/stats/, async (msg) => {
+  const userId = msg.from.id;
+  if (!isAdmin(userId)) return;
+
+  const chatId = msg.chat.id;
+  
+  try {
+    const { data: userCount } = await supabaseAdmin
+      .from('User')
+      .select('id', { count: 'exact', head: true });
+
+    const { data: marketCount } = await supabaseAdmin
+      .from('Market')
+      .select('id', { count: 'exact', head: true });
+
+    const { data: tradeCount } = await supabaseAdmin
+      .from('Trade')
+      .select('id', { count: 'exact', head: true });
+
+    await safeSendMessage(chatId, `📊 **Bot Statistics**
+
+**Users:** ${userCount?.count || 0}
+**Markets:** ${marketCount?.count || 0} 
+**Total Trades:** ${tradeCount?.count || 0}
+**Active Sessions:** ${userSessions.size}
+**Market Mappings:** ${marketMappings.size}
+**Memory Usage:** ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
+**Uptime:** ${Math.round(process.uptime() / 3600)}h
+
+**RPC Provider:** ${RPC_PROVIDERS[currentProviderIndex]}
+**Current Provider Index:** ${currentProviderIndex}`);
+
+  } catch (error) {
+    await safeSendMessage(chatId, `❌ Error fetching stats: ${error.message}`);
+  }
+});
+
+// DATABASE DEBUG TOOL
+bot.onText(/\/dbtest/, async (msg) => {
+  const userId = msg.from.id;
+  if (!isAdmin(userId)) return;
+
+  const chatId = msg.chat.id;
+  
+  await safeSendMessage(chatId, '🔍 **Database Connection Test**\n\nTesting database permissions...');
+  
+  try {
+    // Test 1: Basic connection
+    console.log('Testing basic Supabase connection...');
+    const { data: basicTest, error: basicError } = await supabaseAdmin
+      .from('User')
+      .select('count')
+      .limit(1);
+    
+    if (basicError) {
+      await safeSendMessage(chatId, `❌ **Basic Connection Failed**\nError: ${basicError.message}`);
+      return;
+    }
+    
+    await safeSendMessage(chatId, '✅ Basic connection: OK');
+    
+    // Test 2: User table access
+    console.log('Testing User table access...');
+    const { data: userTest, error: userError } = await supabaseAdmin
+      .from('User')
+      .select('id, username, telegram_id')
+      .limit(3);
+    
+    if (userError) {
+      await safeSendMessage(chatId, `❌ **User Table Access Failed**\nError: ${userError.message}`);
+    } else {
+      await safeSendMessage(chatId, `✅ User table: OK (${userTest?.length || 0} users found)`);
+    }
+    
+    // Test 3: Market table access
+    console.log('Testing Market table access...');
+    const { data: marketTest, error: marketError } = await supabaseAdmin
+      .from('Market')
+      .select('id, question, creatorId, isResolved')
+      .limit(3);
+    
+    if (marketError) {
+      await safeSendMessage(chatId, `❌ **Market Table Access Failed**\nError: ${marketError.message}\n\nThis is likely the main issue!`);
+    } else {
+      await safeSendMessage(chatId, `✅ Market table: OK (${marketTest?.length || 0} markets found)`);
+    }
+    
+    // Test 4: Outcome table access
+    console.log('Testing Outcome table access...');
+    const { data: outcomeTest, error: outcomeError } = await supabaseAdmin
+      .from('Outcome')
+      .select('id, outcome_title, marketId')
+      .limit(3);
+    
+    if (outcomeError) {
+      await safeSendMessage(chatId, `❌ **Outcome Table Access Failed**\nError: ${outcomeError.message}`);
+    } else {
+      await safeSendMessage(chatId, `✅ Outcome table: OK (${outcomeTest?.length || 0} outcomes found)`);
+    }
+    
+    // Test 5: Trade table access
+    console.log('Testing Trade table access...');
+    const { data: tradeTest, error: tradeError } = await supabaseAdmin
+      .from('Trade')
+      .select('id, amount, userId')
+      .limit(3);
+    
+    if (tradeError) {
+      await safeSendMessage(chatId, `❌ **Trade Table Access Failed**\nError: ${tradeError.message}`);
+    } else {
+      await safeSendMessage(chatId, `✅ Trade table: OK (${tradeTest?.length || 0} trades found)`);
+    }
+    
+    // Test 6: bot_wallets table access
+    console.log('Testing bot_wallets table access...');
+    const { data: walletTest, error: walletError } = await supabaseAdmin
+      .from('bot_wallets')
+      .select('id, user_id, address')
+      .limit(3);
+    
+    if (walletError) {
+      await safeSendMessage(chatId, `❌ **bot_wallets Table Access Failed**\nError: ${walletError.message}`);
+    } else {
+      await safeSendMessage(chatId, `✅ bot_wallets table: OK (${walletTest?.length || 0} wallets found)`);
+    }
+    
+    // Summary
+    await safeSendMessage(chatId, `**🔍 Database Test Summary**
+
+**Environment:**
+• Service Role Key: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET' : 'MISSING'}
+• Anon Key: ${process.env.SUPABASE_ANON_KEY ? 'SET' : 'MISSING'}
+• URL: ${process.env.SUPABASE_URL ? 'SET' : 'MISSING'}
+
+**Next Steps:**
+If any table failed, check:
+1. RLS policies in Supabase dashboard
+2. Service role permissions
+3. Table schema matches bot expectations`);
+
+  } catch (error) {
+    console.error('Database test error:', error);
+    await safeSendMessage(chatId, `❌ **Critical Database Error**\nError: ${error.message}\n\nStack: ${error.stack?.split('\n')[0]}`);
+  }
+});
+
+// CREATE TEST MARKET TOOL
+bot.onText(/\/createtestmarket/, async (msg) => {
+  const userId = msg.from.id;
+  if (!isAdmin(userId)) return;
+
+  const chatId = msg.chat.id;
+  
+  try {
+    await safeSendMessage(chatId, '🔨 Creating test market...');
+    
+    // Get or create admin user
+    const user = await getOrCreateUserOptimized(userId, 'Admin');
+    
+    // Create test market
+    const testMarket = {
+      marketId: `test_market_${Date.now()}`,
+      question: 'Will this test market work correctly?',
+      optionA: 'Yes',
+      optionB: 'No',
+      expiry: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours from now
+      creatorId: user.id,
+      isResolved: false,
+      outcome: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      image: null,
+      tags: 'Testing'
+    };
+    
+    const { data: createdMarket, error: marketError } = await supabaseAdmin
+      .from('Market')
+      .insert([testMarket])
+      .select()
+      .single();
+    
+    if (marketError) {
+      await safeSendMessage(chatId, `❌ Failed to create test market: ${marketError.message}`);
+      return;
+    }
+    
+    // Create test outcomes
+    const outcomes = [
+      {
+        marketId: createdMarket.id,
+        outcome_title: 'Yes',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        marketId: createdMarket.id,
+        outcome_title: 'No',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    ];
+    
+    const { error: outcomeError } = await supabaseAdmin
+      .from('Outcome')
+      .insert(outcomes);
+    
+    if (outcomeError) {
+      await safeSendMessage(chatId, `⚠️ Market created but outcomes failed: ${outcomeError.message}`);
+    }
+    
+    await safeSendMessage(chatId, `✅ **Test Market Created Successfully!**
+
+**Market ID:** ${createdMarket.id}
+**Question:** ${testMarket.question}
+**Database ID:** ${createdMarket.marketId}
+
+Now try browsing markets to see if it appears!`);
+    
+  } catch (error) {
+    console.error('Test market creation error:', error);
+    await safeSendMessage(chatId, `❌ Error creating test market: ${error.message}`);
+  }
+});
+
+// Final verification
+setTimeout(async () => {
+  try {
+    console.log('🔍 Final startup verification...');
+    
+    const blockNumber = await provider.getBlockNumber();
+    console.log(`✅ Blockchain connected - Block: ${blockNumber}`);
+    
+    const { error } = await supabaseAdmin.from('User').select('id').limit(1);
+    if (!error) {
+      console.log('✅ Database connected');
+    } else {
+      console.error('❌ Database connection issue:', error.message);
+    }
+    
+    console.log('🚀 Startup verification complete - Bot is ready!');
+    
+  } catch (error) {
+    console.error('❌ Startup verification failed:', error.message);
+  }
+}, 3000);
+
+// BOT STARTUP
+console.log('🤖 Spredd Markets Bot v13 Starting...');
+console.log('🌐 Primary RPC: Alchemy Base// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
 
 // MARKET STATS HANDLER
 async function handleMarketStats(chatId) {
