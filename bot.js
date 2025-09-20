@@ -2208,6 +2208,237 @@ async function handleLeaderboard(chatId) {
   }
 }
 
+// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
+
+// MARKET STATS HANDLER
+async function handleMarketStats(chatId) {
+  try {
+    const { data: marketCount } = await supabaseAdmin
+      .from('Market')
+      .select('id', { count: 'exact', head: true });
+
+    const { data: activeMarkets } = await supabaseAdmin
+      .from('Market')
+      .select('id', { count: 'exact', head: true })
+      .eq('isResolved', false);
+
+    const { data: totalTrades } = await supabaseAdmin
+      .from('Trade')
+      .select('amount');
+
+    const totalVolume = totalTrades?.reduce((sum, trade) => sum + parseFloat(trade.amount || 0), 0) || 0;
+    const avgBetSize = totalTrades?.length ? (totalVolume / totalTrades.length).toFixed(2) : 0;
+
+    const fpStatus = await getFPManagerWeekStatus();
+
+    let statsText = `📈 **Market Statistics**
+
+**Total Markets:** ${marketCount?.count || 0}
+**Active Markets:** ${activeMarkets?.count || 0}
+**Total Trades:** ${totalTrades?.length || 0}
+**Total Volume:** ${totalVolume.toFixed(2)} USDC
+**Average Bet:** ${avgBetSize} USDC
+
+**Network:** Base Mainnet
+**Factory:** ${SPREDD_FACTORY_ADDRESS}
+
+`;
+
+    if (fpStatus) {
+      const statusText = fpStatus.weekStatus === 0 ? 'Active' : 
+                       fpStatus.weekStatus === 1 ? 'Pending' : 'Finalized';
+      statsText += `**FP Manager Status:**
+Week ${fpStatus.currentWeek}: ${statusText}
+Reward Pool: ${fpStatus.currentRewardPool} USDC`;
+    }
+
+    await safeSendMessage(chatId, statsText, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Refresh Stats', callback_data: 'market_stats' }],
+          [{ text: '🏆 FP Status', callback_data: 'fp_status' }],
+          [{ text: '🏪 Browse Markets', callback_data: 'browse_markets' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ]
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in handleMarketStats:', error);
+    await safeSendMessage(chatId, '❌ Error loading market stats. Please try again.');
+  }
+}
+
+// FP STATUS HANDLER
+async function handleFPStatus(chatId) {
+  try {
+    const fpStatus = await getFPManagerWeekStatus();
+    const pendingWeeks = await getPendingWeeks();
+
+    if (!fpStatus) {
+      await safeSendMessage(chatId, '❌ Could not fetch FP Manager status. The system may be updating.');
+      return;
+    }
+
+    const statusEmoji = fpStatus.weekStatus === 0 ? '🟢' : 
+                       fpStatus.weekStatus === 1 ? '🟡' : '🔴';
+    const statusText = fpStatus.weekStatus === 0 ? 'Active - Earning FP' : 
+                      fpStatus.weekStatus === 1 ? 'Pending Finalization' : 'Finalized';
+
+    let fpMessage = `🏆 **Forecast Points (FP) Status**
+
+${statusEmoji} **Week ${fpStatus.currentWeek}:** ${statusText}
+💰 **Current Reward Pool:** ${fpStatus.currentRewardPool} USDC
+
+**How to Earn FP:**
+• Create prediction markets (+FP for creators)
+• Place bets on markets (+FP for traders)  
+• Top performers share weekly rewards
+
+`;
+
+    if (pendingWeeks.weeks.length > 0) {
+      fpMessage += `**Pending Weeks:** ${pendingWeeks.weeks.length}\n`;
+      fpMessage += `**Total Pending Rewards:** ${pendingWeeks.rewardPools.reduce((a,b) => parseFloat(a) + parseFloat(b), 0).toFixed(2)} USDC\n`;
+    }
+
+    fpMessage += `\n**Contract:** ${FP_MANAGER_ADDRESS}`;
+
+    await safeSendMessage(chatId, fpMessage, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Refresh FP Status', callback_data: 'fp_status' }],
+          [{ text: '📈 Market Stats', callback_data: 'market_stats' }],
+          [{ text: '🏪 Start Earning', callback_data: 'browse_markets' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ]
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in handleFPStatus:', error);
+    await safeSendMessage(chatId, '❌ Error loading FP status. Please try again.');
+  }
+}
+
+// WALLET INFO HANDLER
+async function handleSpreddWalletInfo(chatId) {
+  await safeSendMessage(chatId, `❓ **About Spredd Wallets**
+
+**What is a Spredd Wallet?**
+A managed wallet created and secured by this bot for easy interaction with Spredd Markets.
+
+**Key Features:**
+• Automatically created and managed
+• Private keys encrypted and stored securely
+• Instant market interactions
+• No manual transaction signing needed
+
+**Security Notes:**
+• Private keys are encrypted with industry-standard methods
+• Bot operators cannot access your funds maliciously
+• For large amounts, consider using your own wallet
+• Always verify transactions before confirming
+
+**Supported Assets:**
+• USDC (for betting and market creation)
+• ETH (for gas fees)
+• Base network only
+
+**Need Help?**
+Contact support if you experience any issues with your Spredd Wallet.`, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '💰 Check My Balance', callback_data: 'check_balance' }],
+        [{ text: '⬅️ Back to Wallet', callback_data: 'wallet_menu' }]
+      ]
+    }
+  });
+}
+
+// HELP COMMAND
+bot.onText(/\/help/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  const helpMessage = `🤖 **Spredd Markets Bot Help**
+
+**Commands:**
+/start - Start the bot and show main menu
+/help - Show this help message
+/menu - Show main menu
+/cancel - Cancel current operation
+
+**Features:**
+🏪 Browse Markets - View active prediction markets
+➕ Create Market - Create your own prediction market
+💰 Wallet - Manage your Spredd wallet  
+📊 Positions - View your betting positions
+🏆 Leaderboard - See top traders
+📈 Stats - View market statistics
+
+**Market Creation Process:**
+1. Enter your question
+2. Define Option A and Option B
+3. Set expiry date/time
+4. Upload image (optional)
+5. Select category tags
+6. Confirm and create
+
+**Betting:**
+• Requires Spredd Wallet with USDC + ETH
+• Place bets on market outcomes
+• Track positions in real-time
+• Earn Forecast Points (FP)
+
+**Need Help?**
+Visit: ${WEBSITE_URL}
+
+**Contract Addresses (Base):**
+Factory: ${SPREDD_FACTORY_ADDRESS}
+USDC: ${USDC_ADDRESS}
+FP Manager: ${FP_MANAGER_ADDRESS}`;
+
+  await safeSendMessage(chatId, helpMessage);
+});
+
+// MENU COMMAND
+bot.onText(/\/menu/, async (msg) => {
+  const chatId = msg.chat.id;
+  await safeSendMessage(chatId, '🎯 **Main Menu**', mainMenu);
+});
+
+// ADMIN COMMANDS
+bot.onText(/\/admin/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!isAdmin(userId)) {
+    await safeSendMessage(chatId, '❌ Access denied. Admin privileges required.');
+    return;
+  }
+
+  await safeSendMessage(chatId, `🔧 **Admin Panel**
+
+**Available Commands:**
+/stats - Bot statistics
+/users - User count
+/markets - Market count
+/dbtest - Database connection test
+/createtestmarket - Create test market
+/broadcast - Send message to all users
+/fpstatus - Check FP Manager status
+
+**System Status:**
+✅ Bot Online
+✅ Database Connected
+✅ Blockchain Connected
+✅ Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
+
+**Chain:** Base (${BASE_CHAIN_ID})
+**Factory:** ${SPREDD_FACTORY_ADDRESS}
+**FP Manager:** ${FP_MANAGER_ADDRESS}`);
+});
+
 bot.onText(/\/stats/, async (msg) => {
   const userId = msg.from.id;
   if (!isAdmin(userId)) return;
@@ -2432,298 +2663,6 @@ Now try browsing markets to see if it appears!`);
   }
 });
 
-// Final verification
-setTimeout(async () => {
-  try {
-    console.log('🔍 Final startup verification...');
-    
-    const blockNumber = await provider.getBlockNumber();
-    console.log(`✅ Blockchain connected - Block: ${blockNumber}`);
-    
-    const { error } = await supabaseAdmin.from('User').select('id').limit(1);
-    if (!error) {
-      console.log('✅ Database connected');
-    } else {
-      console.error('❌ Database connection issue:', error.message);
-    }
-    
-    console.log('🚀 Startup verification complete - Bot is ready!');
-    
-  } catch (error) {
-    console.error('❌ Startup verification failed:', error.message);
-  }
-}, 3000);
-
-// BOT STARTUP
-console.log('🤖 Spredd Markets Bot v13 Starting...');
-console.log('🌐 Primary RPC: Alchemy Base
-            
-// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
-
-// MARKET STATS HANDLER
-async function handleMarketStats(chatId) {
-  try {
-    const { data: marketCount } = await dbClient
-      .from('Market')
-      .select('id', { count: 'exact', head: true });
-
-    const { data: activeMarkets } = await dbClient
-      .from('Market')
-      .select('id', { count: 'exact', head: true })
-      .eq('isResolved', false);
-
-    const { data: totalTrades } = await dbClient
-      .from('Trade')
-      .select('amount');
-
-    const totalVolume = totalTrades?.reduce((sum, trade) => sum + parseFloat(trade.amount || 0), 0) || 0;
-    const avgBetSize = totalTrades?.length ? (totalVolume / totalTrades.length).toFixed(2) : 0;
-
-    const fpStatus = await getFPManagerWeekStatus();
-
-    let statsText = `📈 **Market Statistics**
-
-**Total Markets:** ${marketCount?.count || 0}
-**Active Markets:** ${activeMarkets?.count || 0}
-**Total Trades:** ${totalTrades?.length || 0}
-**Total Volume:** ${totalVolume.toFixed(2)} USDC
-**Average Bet:** ${avgBetSize} USDC
-
-**Network:** Base Mainnet
-**Factory:** ${SPREDD_FACTORY_ADDRESS}
-
-`;
-
-    if (fpStatus) {
-      const statusText = fpStatus.weekStatus === 0 ? 'Active' : 
-                       fpStatus.weekStatus === 1 ? 'Pending' : 'Finalized';
-      statsText += `**FP Manager Status:**
-Week ${fpStatus.currentWeek}: ${statusText}
-Reward Pool: ${fpStatus.currentRewardPool} USDC`;
-    }
-
-    await safeSendMessage(chatId, statsText, {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🔄 Refresh Stats', callback_data: 'market_stats' }],
-          [{ text: '🏆 FP Status', callback_data: 'fp_status' }],
-          [{ text: '🏪 Browse Markets', callback_data: 'browse_markets' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ]
-      }
-    });
-
-  } catch (error) {
-    console.error('Error in handleMarketStats:', error);
-    await safeSendMessage(chatId, '❌ Error loading market stats. Please try again.');
-  }
-}
-
-// FP STATUS HANDLER
-async function handleFPStatus(chatId) {
-  try {
-    const fpStatus = await getFPManagerWeekStatus();
-    const pendingWeeks = await getPendingWeeks();
-
-    if (!fpStatus) {
-      await safeSendMessage(chatId, '❌ Could not fetch FP Manager status. The system may be updating.');
-      return;
-    }
-
-    const statusEmoji = fpStatus.weekStatus === 0 ? '🟢' : 
-                       fpStatus.weekStatus === 1 ? '🟡' : '🔴';
-    const statusText = fpStatus.weekStatus === 0 ? 'Active - Earning FP' : 
-                      fpStatus.weekStatus === 1 ? 'Pending Finalization' : 'Finalized';
-
-    let fpMessage = `🏆 **Forecast Points (FP) Status**
-
-${statusEmoji} **Week ${fpStatus.currentWeek}:** ${statusText}
-💰 **Current Reward Pool:** ${fpStatus.currentRewardPool} USDC
-
-**How to Earn FP:**
-• Create prediction markets (+FP for creators)
-• Place bets on markets (+FP for traders)  
-• Top performers share weekly rewards
-
-`;
-
-    if (pendingWeeks.weeks.length > 0) {
-      fpMessage += `**Pending Weeks:** ${pendingWeeks.weeks.length}\n`;
-      fpMessage += `**Total Pending Rewards:** ${pendingWeeks.rewardPools.reduce((a,b) => parseFloat(a) + parseFloat(b), 0).toFixed(2)} USDC\n`;
-    }
-
-    fpMessage += `\n**Contract:** ${FP_MANAGER_ADDRESS}`;
-
-    await safeSendMessage(chatId, fpMessage, {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🔄 Refresh FP Status', callback_data: 'fp_status' }],
-          [{ text: '📈 Market Stats', callback_data: 'market_stats' }],
-          [{ text: '🏪 Start Earning', callback_data: 'browse_markets' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ]
-      }
-    });
-
-  } catch (error) {
-    console.error('Error in handleFPStatus:', error);
-    await safeSendMessage(chatId, '❌ Error loading FP status. Please try again.');
-  }
-}
-
-// WALLET INFO HANDLER
-async function handleSpreddWalletInfo(chatId) {
-  await safeSendMessage(chatId, `❓ **About Spredd Wallets**
-
-**What is a Spredd Wallet?**
-A managed wallet created and secured by this bot for easy interaction with Spredd Markets.
-
-**Key Features:**
-• Automatically created and managed
-• Private keys encrypted and stored securely
-• Instant market interactions
-• No manual transaction signing needed
-
-**Security Notes:**
-• Private keys are encrypted with industry-standard methods
-• Bot operators cannot access your funds maliciously
-• For large amounts, consider using your own wallet
-• Always verify transactions before confirming
-
-**Supported Assets:**
-• USDC (for betting and market creation)
-• ETH (for gas fees)
-• Base network only
-
-**Need Help?**
-Contact support if you experience any issues with your Spredd Wallet.`, {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '💰 Check My Balance', callback_data: 'check_balance' }],
-        [{ text: '⬅️ Back to Wallet', callback_data: 'wallet_menu' }]
-      ]
-    }
-  });
-}
-
-// HELP COMMAND
-bot.onText(/\/help/, async (msg) => {
-  const chatId = msg.chat.id;
-  
-  const helpMessage = `🤖 **Spredd Markets Bot Help**
-
-**Commands:**
-/start - Start the bot and show main menu
-/help - Show this help message
-/menu - Show main menu
-/cancel - Cancel current operation
-
-**Features:**
-🏪 Browse Markets - View active prediction markets
-➕ Create Market - Create your own prediction market
-💰 Wallet - Manage your Spredd wallet  
-📊 Positions - View your betting positions
-🏆 Leaderboard - See top traders
-📈 Stats - View market statistics
-
-**Market Creation Process:**
-1. Enter your question
-2. Define Option A and Option B
-3. Set expiry date/time
-4. Upload image (optional)
-5. Select category tags
-6. Confirm and create
-
-**Betting:**
-• Requires Spredd Wallet with USDC + ETH
-• Place bets on market outcomes
-• Track positions in real-time
-• Earn Forecast Points (FP)
-
-**Need Help?**
-Visit: ${WEBSITE_URL}
-
-**Contract Addresses (Base):**
-Factory: ${SPREDD_FACTORY_ADDRESS}
-USDC: ${USDC_ADDRESS}
-FP Manager: ${FP_MANAGER_ADDRESS}`;
-
-  await safeSendMessage(chatId, helpMessage);
-});
-
-// MENU COMMAND
-bot.onText(/\/menu/, async (msg) => {
-  const chatId = msg.chat.id;
-  await safeSendMessage(chatId, '🎯 **Main Menu**', mainMenu);
-});
-
-// ADMIN COMMANDS
-bot.onText(/\/admin/, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!isAdmin(userId)) {
-    await safeSendMessage(chatId, '❌ Access denied. Admin privileges required.');
-    return;
-  }
-
-  await safeSendMessage(chatId, `🔧 **Admin Panel**
-
-**Available Commands:**
-/stats - Bot statistics
-/users - User count
-/markets - Market count
-/broadcast - Send message to all users
-/fpstatus - Check FP Manager status
-
-**System Status:**
-✅ Bot Online
-✅ Database Connected
-✅ Blockchain Connected
-✅ Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
-
-**Chain:** Base (${BASE_CHAIN_ID})
-**Factory:** ${SPREDD_FACTORY_ADDRESS}
-**FP Manager:** ${FP_MANAGER_ADDRESS}`);
-});
-
-bot.onText(/\/stats/, async (msg) => {
-  const userId = msg.from.id;
-  if (!isAdmin(userId)) return;
-
-  const chatId = msg.chat.id;
-  
-  try {
-    const { data: userCount } = await dbClient
-      .from('User')
-      .select('id', { count: 'exact', head: true });
-
-    const { data: marketCount } = await dbClient
-      .from('Market')
-      .select('id', { count: 'exact', head: true });
-
-    const { data: tradeCount } = await dbClient
-      .from('Trade')
-      .select('id', { count: 'exact', head: true });
-
-    await safeSendMessage(chatId, `📊 **Bot Statistics**
-
-**Users:** ${userCount?.count || 0}
-**Markets:** ${marketCount?.count || 0} 
-**Total Trades:** ${tradeCount?.count || 0}
-**Active Sessions:** ${userSessions.size}
-**Market Mappings:** ${marketMappings.size}
-**Memory Usage:** ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
-**Uptime:** ${Math.round(process.uptime() / 3600)}h
-
-**RPC Provider:** ${RPC_PROVIDERS[currentProviderIndex]}
-**Current Provider Index:** ${currentProviderIndex}`);
-
-  } catch (error) {
-    await safeSendMessage(chatId, `❌ Error fetching stats: ${error.message}`);
-  }
-});
-
 // CANCEL COMMAND
 bot.onText(/\/cancel/, async (msg) => {
   const chatId = msg.chat.id;
@@ -2856,7 +2795,7 @@ setTimeout(async () => {
     const blockNumber = await provider.getBlockNumber();
     console.log(`✅ Blockchain connected - Block: ${blockNumber}`);
     
-    const { error } = await dbClient.from('User').select('id').limit(1);
+    const { error } = await supabaseAdmin.from('User').select('id').limit(1);
     if (!error) {
       console.log('✅ Database connected');
     } else {
@@ -2871,11 +2810,11 @@ setTimeout(async () => {
 }, 3000);
 
 // BOT STARTUP
-console.log('🤖 Spredd Markets Bot v12 Starting...');
+console.log('🤖 Spredd Markets Bot v13 Starting...');
 console.log('🌐 Primary RPC: Alchemy Base Mainnet');
 console.log(`🏭 Factory: ${SPREDD_FACTORY_ADDRESS}`);
 console.log(`💰 USDC: ${USDC_ADDRESS}`);
 console.log(`🏆 FP Manager: ${FP_MANAGER_ADDRESS}`);
 console.log(`🔗 Website: ${WEBSITE_URL}`);
-console.log('✨ Features: Complete Handler Functions, Fixed Database Permissions, Safe Message Formatting');
+console.log('✨ Features: Complete Database Fix, FP Manager Bypass, Enhanced Date Parsing');
 console.log('✅ Bot is ready and listening for messages!');
