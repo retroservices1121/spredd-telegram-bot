@@ -2456,7 +2456,9 @@ setTimeout(async () => {
 
 // BOT STARTUP
 console.log('🤖 Spredd Markets Bot v13 Starting...');
-console.log('🌐 Primary RPC: Alchemy Base// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
+console.log('🌐 Primary RPC: Alchemy Base
+            
+// bot.js - Part 10/10: Statistics, Admin Commands, and System Setup
 
 // MARKET STATS HANDLER
 async function handleMarketStats(chatId) {
