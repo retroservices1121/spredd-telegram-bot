@@ -1,5 +1,5 @@
 // bot.js - Complete Spredd Markets Bot with Image Upload, Tags, and Performance Fixes
-// PART 1/3: Setup, Configuration, and Initialization - UPDATED WITH FP MANAGER
+// PART 1/3: Setup, Configuration, and Initialization - FINAL FIXED VERSION
 
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
@@ -128,13 +128,15 @@ const USDC_ABI = [
   'function allowance(address owner, address spender) view returns (uint256)'
 ];
 
+// UPDATED FACTORY ABI with alternative functions
 const FACTORY_ABI = [
   'function getAllMarkets() view returns (bytes32[] memory)',
   'function getMarketDetails(bytes32 _marketId) view returns (string memory question, string memory optionA, string memory optionB, uint256 endTime, bool resolved, uint256 volumeA, uint256 volumeB, uint256 totalVolume, uint256 oddsA, uint256 oddsB, uint256 bettorCount)',
   'function getMarketAddress(bytes32 _marketId) view returns (address)',
   'function getMarketCreationFee() view returns (uint256)',
   'function createMarket(string memory _question, string memory _optionA, string memory _optionB, uint256 _endTime) returns (bytes32 marketId, address marketContract)',
-  'function markets(bytes32 marketId) view returns (address)'
+  'function markets(bytes32 marketId) view returns (address)',
+  'function createPredictionMarket(string memory _question, string memory _optionA, string memory _optionB, uint256 _endTime) returns (bytes32 marketId, address marketContract)'
 ];
 
 // FP Manager ABI - Added to check week status
@@ -289,7 +291,7 @@ function createCategoryButtons() {
   return buttons;
 }
 
-// FP Manager helper functions
+// FP Manager helper functions (kept for stats display only)
 async function getFPManagerWeekStatus() {
   try {
     const weekInfo = await retryRPCCallOptimized(async () => {
@@ -330,7 +332,7 @@ async function getPendingWeeks() {
   }
 }
 
-// bot.js - PART 2/3: Core Functions and User Management - FIXED
+// bot.js - PART 2/3: Core Functions and User Management - FINAL FIXED VERSION
 
 // Optimized user creation function
 async function getOrCreateUserOptimized(telegramId, username = null) {
@@ -384,7 +386,7 @@ async function getOrCreateUserOptimized(telegramId, username = null) {
   }
 }
 
-// Wallet functions - FIXED user_id to userId
+// FIXED Wallet functions - using correct database schema
 async function createSpreddWallet(userId) {
   try {
     console.log(`Creating wallet for user ID: ${userId}`);
@@ -392,7 +394,7 @@ async function createSpreddWallet(userId) {
     console.log(`Generated wallet address: ${wallet.address}`);
     
     const walletData = {
-      user_id: userId,   // FIXED: Use snake_case to match database schema
+      user_id: userId,  // FIXED: Using snake_case to match database schema
       address: wallet.address,
       encrypted_private_key: encrypt(wallet.privateKey),
       created_at: new Date().toISOString()
@@ -436,7 +438,7 @@ async function getUserSpreddWallet(userId) {
     const { data: wallet } = await supabaseAdmin
       .from('bot_wallets')
       .select('*')
-      .eq('user_id', user.id)  // FIXED: Use snake_case to match database schema
+      .eq('user_id', user.id)  // FIXED: Using snake_case to match database schema
       .single();
 
     if (!wallet) return null;
@@ -944,526 +946,29 @@ Send the address or use /cancel to abort.`, {
   }
 }
 
-// bot.js - PART 3/3: Market Functions, Message Handlers, and Bot Completion - VERSION 10 FIXED
-// Features: Image Upload, Tags Selection, ETH Balance Integration, Performance Optimizations
-
-// OPTIMIZED BROWSE MARKETS - DATABASE ONLY
-async function handleBrowseMarketsOptimized(chatId, userId) {
-  try {
-    console.log('🔄 Loading markets from database...');
-    
-    const loadingMsg = await bot.sendMessage(chatId, '🔄 Loading markets...');
-    
-    // Query database for active markets - FIXED: using correct column names
-    let { data: markets, error } = await supabase
-      .from('Market')
-      .select('*')
-      .eq('isResolved', false)
-      .order('createdAt', { ascending: false })
-      .limit(10);
-
-    if (error) {
-      console.error('Database error:', error);
-      await bot.editMessageText('❌ Error loading markets from database. Please try again.', {
-        chat_id: chatId,
-        message_id: loadingMsg.message_id,
-        ...createInlineKeyboard([
-          [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ])
-      });
-      return;
-    }
-
-    if (!markets || markets.length === 0) {
-      await bot.editMessageText('📭 No active markets found.\n\nBe the first to create one!', {
-        chat_id: chatId,
-        message_id: loadingMsg.message_id,
-        ...createInlineKeyboard([
-          [{ text: '➕ Create Market', callback_data: 'create_market' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ])
-      });
-      return;
-    }
-
-    // Clear existing mappings for this session
-    marketMappings.clear();
-    marketCounter = 0;
-
-    console.log(`✅ Found ${markets.length} markets in database`);
-
-    // Create market buttons with database info - FIXED: using correct column names
-    const marketButtons = [];
-    for (const market of markets.slice(0, 8)) { // Limit to 8 for UI
-      marketCounter++;
-      const marketKey = `market_${marketCounter}`;
-      marketMappings.set(marketKey, {
-        ...market,
-        marketId: market.marketId,
-        question: market.question || 'Unknown Question',
-        optionA: market.optionA || 'Option A',
-        optionB: market.optionB || 'Option B',
-        endTime: market.resolutionDate,
-        image: market.image,
-        tags: market.tags
-      });
-
-      // Format end time - FIXED: using resolutionDate
-      let timeDisplay = 'No resolution date';
-      if (market.resolutionDate) {
-        const endTime = new Date(market.resolutionDate);
-        const now = new Date();
-        const timeDiff = endTime.getTime() - now.getTime();
-        const daysLeft = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
-        timeDisplay = daysLeft > 0 ? `${daysLeft}d left` : 'Ended';
-      }
-
-      // Add tags to display
-      const tagsDisplay = market.tags ? ` [${market.tags}]` : '';
-      
-      const buttonText = `${market.question?.slice(0, 35) || 'Market'}${market.question?.length > 35 ? '...' : ''} - ${timeDisplay}${tagsDisplay}`;
-      marketButtons.push([{ text: buttonText, callback_data: marketKey }]);
-    }
-
-    marketButtons.push(
-      [{ text: '🔄 Refresh Markets', callback_data: 'browse_markets' }],
-      [{ text: '➕ Create Market', callback_data: 'create_market' }],
-      [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-    );
-
-    await bot.editMessageText(`🏪 **Active Markets** (${markets.length} total)\n\nSelect a market to view details and place bets:`, {
-      chat_id: chatId,
-      message_id: loadingMsg.message_id,
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: marketButtons }
-    });
-
-  } catch (error) {
-    console.error('❌ Error in handleBrowseMarketsOptimized:', error);
-    await bot.sendMessage(chatId, '❌ Error loading markets. Please try again.', {
-      ...createInlineKeyboard([
-        [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
-        [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-      ])
-    });
-  }
-}
-
-// ENHANCED MARKET ACTION HANDLER
-async function handleMarketActionOptimized(chatId, userId, marketKey) {
-  try {
-    const marketData = marketMappings.get(marketKey);
-    if (!marketData) {
-      await bot.sendMessage(chatId, '❌ Market data not found. Please refresh the market list.', {
-        ...createInlineKeyboard([
-          [{ text: '🏪 Browse Markets', callback_data: 'browse_markets' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ])
-      });
-      return;
-    }
-
-    // Format end time
-    let timeDisplay = 'No end time set';
-    let timeStatus = '';
-    if (marketData.endTime) {
-      const endTime = new Date(marketData.endTime);
-      const now = new Date();
-      const timeDiff = endTime.getTime() - now.getTime();
-      
-      if (timeDiff > 0) {
-        const daysLeft = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
-        const hoursLeft = Math.ceil(timeDiff / (1000 * 60 * 60));
-        timeDisplay = daysLeft > 1 ? `${daysLeft} days remaining` : `${hoursLeft} hours remaining`;
-        timeStatus = '🟢 Active';
+troubleshooting = 'Please check your ETH balance and try again.';
       } else {
-        timeDisplay = 'Market has ended';
-        timeStatus = '🔴 Ended';
-      }
-    }
-
-    // Create market display with image and tags
-    let marketMessage = `📊 **Market Details**
-
-**Question:** ${marketData.question}
-
-**Options:**
-🔵 A: ${marketData.optionA}
-🔴 B: ${marketData.optionB}
-
-**Status:** ${timeStatus}
-**Time:** ${timeDisplay}`;
-
-    // Add tags if available
-    if (marketData.tags) {
-      marketMessage += `\n**Category:** ${marketData.tags}`;
-    }
-
-    // Add market ID for reference
-    if (marketData.marketId) {
-      marketMessage += `\n**Market ID:** \`${marketData.marketId}\``;
-    }
-
-    const actionButtons = [
-      [
-        { text: '🔵 Bet on A', callback_data: `bet_${marketKey}_A` },
-        { text: '🔴 Bet on B', callback_data: `bet_${marketKey}_B` }
-      ],
-      [{ text: '📊 View Stats', callback_data: `stats_${marketKey}` }],
-      [{ text: '⬅️ Back to Markets', callback_data: 'browse_markets' }]
-    ];
-
-    // Check if market has an image and send it
-    if (marketData.image) {
-      try {
-        await bot.sendPhoto(chatId, marketData.image, {
-          caption: marketMessage,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: actionButtons }
-        });
-      } catch (imageError) {
-        console.error('Error sending market image:', imageError);
-        // Fallback to text message if image fails
-        await bot.sendMessage(chatId, marketMessage + '\n\n⚠️ Market image could not be displayed.', {
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: actionButtons }
-        });
-      }
-    } else {
-      await bot.sendMessage(chatId, marketMessage, {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: actionButtons }
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ Error in handleMarketActionOptimized:', error);
-    await bot.sendMessage(chatId, '❌ Error loading market details. Please try again.');
-  }
-}
-
-// OPTIMIZED CREATE MARKET WITH IMAGE AND TAGS
-async function handleCreateMarketOptimized(chatId, userId) {
-  try {
-    // Check for existing wallet first
-    const wallet = await getUserSpreddWallet(userId);
-    if (!wallet) {
-      await bot.sendMessage(chatId, '❌ You need a Spredd Wallet to create markets.', {
-        ...createInlineKeyboard([
-          [{ text: '🆕 Create Spredd Wallet', callback_data: 'create_spredd_wallet' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ])
-      });
-      return;
-    }
-
-    // Check balances
-    const [usdcBalance, ethBalance, creationFee] = await Promise.all([
-      getUSDCBalance(wallet.address),
-      getETHBalance(wallet.address),
-      getMarketCreationFee()
-    ]);
-
-    const hasEnoughUSDC = parseFloat(usdcBalance) >= parseFloat(creationFee);
-    const hasEnoughETH = parseFloat(ethBalance) > 0.001;
-
-    if (!hasEnoughUSDC || !hasEnoughETH) {
-      await bot.sendMessage(chatId, `❌ **Insufficient Balance for Market Creation**
-
-**Requirements:**
-• ${creationFee} USDC (creation fee)
-• 0.001+ ETH (gas fees)
-
-**Your Balance:**
-• ${usdcBalance} USDC ${hasEnoughUSDC ? '✅' : '❌'}
-• ${ethBalance} ETH ${hasEnoughETH ? '✅' : '❌'}
-
-Please fund your wallet and try again.`, {
-        parse_mode: 'Markdown',
-        ...createInlineKeyboard([
-          [{ text: '📥 Get Deposit Address', callback_data: 'deposit_address' }],
-          [{ text: '💰 Check Balance', callback_data: 'check_balance' }],
-          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-        ])
-      });
-      return;
-    }
-
-    // Initialize creation session
-    userSessions.set(chatId, {
-      action: 'create_market',
-      step: 1,
-      question: '',
-      optionA: '',
-      optionB: '',
-      duration: '',
-      image: null,
-      tags: null,
-      timestamp: Date.now()
-    });
-
-    await bot.sendMessage(chatId, `➕ **Create New Market** - Step 1/6
-
-**Market Creation Fee:** ${creationFee} USDC + gas
-**Your Balance:** ${usdcBalance} USDC, ${ethBalance} ETH ✅
-
-Please enter your market question (max 200 characters):
-
-Example: "Will Bitcoin reach $100,000 by December 2025?"
-
-Send /cancel to abort.`, {
-      parse_mode: 'Markdown'
-    });
-
-  } catch (error) {
-    console.error('❌ Error in handleCreateMarketOptimized:', error);
-    await bot.sendMessage(chatId, `❌ Error starting market creation: ${error.message}`);
-  }
-}
-
-// TAG SELECTION HANDLER
-async function handleTagSelection(chatId, userId, data) {
-  try {
-    const session = userSessions.get(chatId);
-    if (!session || session.action !== 'create_market' || session.step !== 5) {
-      await bot.sendMessage(chatId, '❌ Invalid session. Please start market creation again.');
-      return;
-    }
-
-    const tag = data.replace('tag_', '');
-    session.tags = tag;
-    session.step = 6;
-    userSessions.set(chatId, session);
-
-    await showMarketSummary(chatId, session);
-
-  } catch (error) {
-    console.error('Error in handleTagSelection:', error);
-    await bot.sendMessage(chatId, '❌ Error selecting tag. Please try again.');
-  }
-}
-
-// SKIP TAGS HANDLER
-async function handleSkipTags(chatId, userId) {
-  try {
-    const session = userSessions.get(chatId);
-    if (!session || session.action !== 'create_market' || session.step !== 5) {
-      await bot.sendMessage(chatId, '❌ Invalid session. Please start market creation again.');
-      return;
-    }
-
-    session.tags = null; // No tag selected
-    session.step = 6;
-    userSessions.set(chatId, session);
-
-    await showMarketSummary(chatId, session);
-
-  } catch (error) {
-    console.error('Error in handleSkipTags:', error);
-    await bot.sendMessage(chatId, '❌ Error skipping tags. Please try again.');
-  }
-}
-
-// SHOW MARKET SUMMARY
-async function showMarketSummary(chatId, session) {
-  try {
-    const creationFee = await getMarketCreationFee();
-    
-    let summaryMessage = `📋 **Market Creation Summary**
-
-**Question:** ${session.question}
-**Option A:** ${session.optionA}
-**Option B:** ${session.optionB}
-**Duration:** ${session.duration}
-**Category:** ${session.tags || 'None'}
-**Image:** ${session.image ? '✅ Uploaded' : '❌ None'}
-
-**Cost:** ${creationFee} USDC + gas fees
-
-Ready to create this market?`;
-
-    const confirmButtons = [
-      [{ text: '✅ Create Market', callback_data: 'confirm_create_market' }],
-      [{ text: '❌ Cancel', callback_data: 'cancel_create_market' }],
-      [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-    ];
-
-    if (session.image) {
-      await bot.sendPhoto(chatId, session.image, {
-        caption: summaryMessage,
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: confirmButtons }
-      });
-    } else {
-      await bot.sendMessage(chatId, summaryMessage, {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: confirmButtons }
-      });
-    }
-
-  } catch (error) {
-    console.error('Error showing market summary:', error);
-    await bot.sendMessage(chatId, '❌ Error showing summary. Please try again.');
-  }
-}
-
-// CONFIRM CREATE MARKET - FIXED: All database schema issues
-async function handleConfirmCreateMarket(chatId, userId) {
-  try {
-    const session = userSessions.get(chatId);
-    if (!session || session.action !== 'create_market') {
-      await bot.sendMessage(chatId, '❌ Invalid session.');
-      return;
-    }
-
-    const processingMsg = await bot.sendMessage(chatId, '🔄 Creating market on blockchain...\nThis may take 1-2 minutes.');
-
-    const user = await getOrCreateUserOptimized(userId);
-    const wallet = await getUserSpreddWallet(userId);
-    
-    if (!wallet) {
-      await bot.editMessageText('❌ Wallet not found.', {
-        chat_id: chatId,
-        message_id: processingMsg.message_id
-      });
-      return;
-    }
-
-    // Calculate end time
-    const durationDays = parseInt(session.duration);
-    const endTime = Math.floor(Date.now() / 1000) + (durationDays * 24 * 60 * 60);
-
-    // Create wallet instance with private key
-    const userWallet = new ethers.Wallet(wallet.privateKey, provider);
-    const factoryWithSigner = factoryContract.connect(userWallet);
-
-    // Create market on blockchain
-    const createTx = await factoryWithSigner.createMarket(
-      session.question,
-      session.optionA,
-      session.optionB,
-      endTime
-    );
-
-    await bot.editMessageText('⏳ Transaction submitted. Waiting for confirmation...', {
-      chat_id: chatId,
-      message_id: processingMsg.message_id
-    });
-
-    const receipt = await createTx.wait();
-    console.log('Market creation receipt:', receipt);
-
-    // Extract market ID from transaction receipt
-    const marketCreatedEvent = receipt.logs.find(log => {
-      try {
-        const decoded = factoryContract.interface.parseLog(log);
-        return decoded.name === 'MarketCreated';
-      } catch (e) {
-        return false;
-      }
-    });
-
-    let marketId = null;
-    if (marketCreatedEvent) {
-      const decoded = factoryContract.interface.parseLog(marketCreatedEvent);
-      marketId = decoded.args.marketId;
-    }
-
-    // FIXED: Add missing variable declaration and use correct column names
-    const resolutionDate = new Date(endTime * 1000);
-    const marketData = {
-      marketId: marketId || `manual_${Date.now()}`,
-      question: session.question,
-      optionA: session.optionA,
-      optionB: session.optionB,
-      resolutionDate: resolutionDate.toISOString(),
-      creatorId: user.id,
-      isResolved: false,
-      outcome: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      image: session.image,
-      tags: session.tags
-    };
-
-    const { data: createdMarket, error: dbError } = await supabase
-      .from('Market')
-      .insert([marketData])
-      .select()
-      .single();
-
-    if (dbError) {
-      console.error('Database error:', dbError);
-    }
-
-    // Clean up session
-    userSessions.delete(chatId);
-
-    // FIXED: Create outcomes after market creation
-    if (createdMarket) {
-      const outcomes = [
-        {
-          marketId: createdMarket.id,
-          outcome_title: session.optionA,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        },
-        {
-          marketId: createdMarket.id, 
-          outcome_title: session.optionB,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
-      ];
-
-      const { error: outcomeError } = await supabase
-        .from('Outcome')
-        .insert(outcomes);
-
-      if (outcomeError) {
-        console.error('Error creating outcomes:', outcomeError);
+        // Truncate very long error messages
+        errorMessage = error.message.slice(0, 150) + (error.message.length > 150 ? '...' : '');
       }
     }
     
-    await bot.editMessageText(`🎉 **Market Created Successfully!**
+    const fullMessage = `❌ **Market Creation Failed**
 
-**Question:** ${session.question}
-**Options:** ${session.optionA} vs ${session.optionB}
-**Duration:** ${session.duration} days
-**Category:** ${session.tags || 'None'}
-**Image:** ${session.image ? 'Included' : 'None'}
+**Error:** ${errorMessage}
 
-${marketId ? `**Market ID:** \`${marketId}\`` : ''}
-**Transaction:** \`${createTx.hash}\`
+${troubleshooting ? `**Troubleshooting:** ${troubleshooting}\n` : ''}
+Please try again later or contact support if the issue persists.`;
 
-Your market is now live and available for betting!`, {
-      chat_id: chatId,
-      message_id: processingMsg.message_id,
+    await bot.sendMessage(chatId, fullMessage, {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🏪 View Markets', callback_data: 'browse_markets' }],
-          [{ text: '➕ Create Another', callback_data: 'create_market' }],
+          [{ text: '🔄 Try Again', callback_data: 'create_market' }],
+          [{ text: '💰 Check Balance', callback_data: 'check_balance' }],
           [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
         ]
       }
-    });
-
-  } catch (error) {
-    console.error('❌ Error creating market:', error);
-    userSessions.delete(chatId);
-    
-    await bot.sendMessage(chatId, `❌ **Market Creation Failed**
-
-Error: ${error.message}
-
-Please try again later or contact support if the issue persists.`, {
-      parse_mode: 'Markdown',
-      ...createInlineKeyboard([
-        [{ text: '🔄 Try Again', callback_data: 'create_market' }],
-        [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
-      ])
     });
   }
 }
@@ -2222,6 +1727,7 @@ bot.onText(/\/stats/, async (msg) => {
 });
 
 // CANCEL COMMAND
+// CANCEL COMMAND
 bot.onText(/\/cancel/, async (msg) => {
   const chatId = msg.chat.id;
   const session = userSessions.get(chatId);
@@ -2254,4 +1760,545 @@ console.log(`💰 USDC: ${USDC_ADDRESS}`);
 console.log(`🏆 FP Manager: ${FP_MANAGER_ADDRESS}`);
 console.log(`🔗 Website: ${WEBSITE_URL}`);
 console.log('✨ Features: Image Upload, Tags Selection, ETH Balance Checks, Performance Optimizations');
-console.log('✅ Bot is ready and listening for messages!');
+console.log('✅ Bot is ready and listening for messages!');// bot.js - PART 3/3: Market Functions, Message Handlers, and Bot Completion - FINAL FIXED VERSION
+
+// OPTIMIZED BROWSE MARKETS - DATABASE ONLY
+async function handleBrowseMarketsOptimized(chatId, userId) {
+  try {
+    console.log('🔄 Loading markets from database...');
+    
+    const loadingMsg = await bot.sendMessage(chatId, '🔄 Loading markets...');
+    
+    // Query database for active markets - FIXED: using correct column names
+    let { data: markets, error } = await supabase
+      .from('Market')
+      .select('*')
+      .eq('isResolved', false)
+      .order('createdAt', { ascending: false })
+      .limit(10);
+
+    if (error) {
+      console.error('Database error:', error);
+      await bot.editMessageText('❌ Error loading markets from database. Please try again.', {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        ...createInlineKeyboard([
+          [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ])
+      });
+      return;
+    }
+
+    if (!markets || markets.length === 0) {
+      await bot.editMessageText('📭 No active markets found.\n\nBe the first to create one!', {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        ...createInlineKeyboard([
+          [{ text: '➕ Create Market', callback_data: 'create_market' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ])
+      });
+      return;
+    }
+
+    // Clear existing mappings for this session
+    marketMappings.clear();
+    marketCounter = 0;
+
+    console.log(`✅ Found ${markets.length} markets in database`);
+
+    // Create market buttons with database info - FIXED: using correct column names
+    const marketButtons = [];
+    for (const market of markets.slice(0, 8)) { // Limit to 8 for UI
+      marketCounter++;
+      const marketKey = `market_${marketCounter}`;
+      marketMappings.set(marketKey, {
+        ...market,
+        marketId: market.marketId,
+        question: market.question || 'Unknown Question',
+        optionA: market.optionA || 'Option A',
+        optionB: market.optionB || 'Option B',
+        endTime: market.resolutionDate,
+        image: market.image,
+        tags: market.tags
+      });
+
+      // Format end time - FIXED: using resolutionDate
+      let timeDisplay = 'No resolution date';
+      if (market.resolutionDate) {
+        const endTime = new Date(market.resolutionDate);
+        const now = new Date();
+        const timeDiff = endTime.getTime() - now.getTime();
+        const daysLeft = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+        timeDisplay = daysLeft > 0 ? `${daysLeft}d left` : 'Ended';
+      }
+
+      // Add tags to display
+      const tagsDisplay = market.tags ? ` [${market.tags}]` : '';
+      
+      const buttonText = `${market.question?.slice(0, 35) || 'Market'}${market.question?.length > 35 ? '...' : ''} - ${timeDisplay}${tagsDisplay}`;
+      marketButtons.push([{ text: buttonText, callback_data: marketKey }]);
+    }
+
+    marketButtons.push(
+      [{ text: '🔄 Refresh Markets', callback_data: 'browse_markets' }],
+      [{ text: '➕ Create Market', callback_data: 'create_market' }],
+      [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+    );
+
+    await bot.editMessageText(`🏪 **Active Markets** (${markets.length} total)\n\nSelect a market to view details and place bets:`, {
+      chat_id: chatId,
+      message_id: loadingMsg.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: marketButtons }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in handleBrowseMarketsOptimized:', error);
+    await bot.sendMessage(chatId, '❌ Error loading markets. Please try again.', {
+      ...createInlineKeyboard([
+        [{ text: '🔄 Try Again', callback_data: 'browse_markets' }],
+        [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+      ])
+    });
+  }
+}
+
+// ENHANCED MARKET ACTION HANDLER
+async function handleMarketActionOptimized(chatId, userId, marketKey) {
+  try {
+    const marketData = marketMappings.get(marketKey);
+    if (!marketData) {
+      await bot.sendMessage(chatId, '❌ Market data not found. Please refresh the market list.', {
+        ...createInlineKeyboard([
+          [{ text: '🏪 Browse Markets', callback_data: 'browse_markets' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ])
+      });
+      return;
+    }
+
+    // Format end time
+    let timeDisplay = 'No end time set';
+    let timeStatus = '';
+    if (marketData.endTime) {
+      const endTime = new Date(marketData.endTime);
+      const now = new Date();
+      const timeDiff = endTime.getTime() - now.getTime();
+      
+      if (timeDiff > 0) {
+        const daysLeft = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+        const hoursLeft = Math.ceil(timeDiff / (1000 * 60 * 60));
+        timeDisplay = daysLeft > 1 ? `${daysLeft} days remaining` : `${hoursLeft} hours remaining`;
+        timeStatus = '🟢 Active';
+      } else {
+        timeDisplay = 'Market has ended';
+        timeStatus = '🔴 Ended';
+      }
+    }
+
+    // Create market display with image and tags
+    let marketMessage = `📊 **Market Details**
+
+**Question:** ${marketData.question}
+
+**Options:**
+🔵 A: ${marketData.optionA}
+🔴 B: ${marketData.optionB}
+
+**Status:** ${timeStatus}
+**Time:** ${timeDisplay}`;
+
+    // Add tags if available
+    if (marketData.tags) {
+      marketMessage += `\n**Category:** ${marketData.tags}`;
+    }
+
+    // Add market ID for reference
+    if (marketData.marketId) {
+      marketMessage += `\n**Market ID:** \`${marketData.marketId}\``;
+    }
+
+    const actionButtons = [
+      [
+        { text: '🔵 Bet on A', callback_data: `bet_${marketKey}_A` },
+        { text: '🔴 Bet on B', callback_data: `bet_${marketKey}_B` }
+      ],
+      [{ text: '📊 View Stats', callback_data: `stats_${marketKey}` }],
+      [{ text: '⬅️ Back to Markets', callback_data: 'browse_markets' }]
+    ];
+
+    // Check if market has an image and send it
+    if (marketData.image) {
+      try {
+        await bot.sendPhoto(chatId, marketData.image, {
+          caption: marketMessage,
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: actionButtons }
+        });
+      } catch (imageError) {
+        console.error('Error sending market image:', imageError);
+        // Fallback to text message if image fails
+        await bot.sendMessage(chatId, marketMessage + '\n\n⚠️ Market image could not be displayed.', {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: actionButtons }
+        });
+      }
+    } else {
+      await bot.sendMessage(chatId, marketMessage, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: actionButtons }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error in handleMarketActionOptimized:', error);
+    await bot.sendMessage(chatId, '❌ Error loading market details. Please try again.');
+  }
+}
+
+// CORRECTED CREATE MARKET - REMOVES WEEK STATUS DEPENDENCY
+async function handleCreateMarketOptimized(chatId, userId) {
+  try {
+    // Check for existing wallet first
+    const wallet = await getUserSpreddWallet(userId);
+    if (!wallet) {
+      await bot.sendMessage(chatId, '❌ You need a Spredd Wallet to create markets.', {
+        ...createInlineKeyboard([
+          [{ text: '🆕 Create Spredd Wallet', callback_data: 'create_spredd_wallet' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ])
+      });
+      return;
+    }
+
+    // Check balances only (removed week status check)
+    const [usdcBalance, ethBalance, creationFee] = await Promise.all([
+      getUSDCBalance(wallet.address),
+      getETHBalance(wallet.address),
+      getMarketCreationFee()
+    ]);
+
+    const hasEnoughUSDC = parseFloat(usdcBalance) >= parseFloat(creationFee);
+    const hasEnoughETH = parseFloat(ethBalance) > 0.001;
+
+    if (!hasEnoughUSDC || !hasEnoughETH) {
+      await bot.sendMessage(chatId, `❌ **Insufficient Balance for Market Creation**
+
+**Requirements:**
+• ${creationFee} USDC (creation fee)
+• 0.001+ ETH (gas fees)
+
+**Your Balance:**
+• ${usdcBalance} USDC ${hasEnoughUSDC ? '✅' : '❌'}
+• ${ethBalance} ETH ${hasEnoughETH ? '✅' : '❌'}
+
+Please fund your wallet and try again.`, {
+        parse_mode: 'Markdown',
+        ...createInlineKeyboard([
+          [{ text: '📥 Get Deposit Address', callback_data: 'deposit_address' }],
+          [{ text: '💰 Check Balance', callback_data: 'check_balance' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ])
+      });
+      return;
+    }
+
+    // Initialize creation session
+    userSessions.set(chatId, {
+      action: 'create_market',
+      step: 1,
+      question: '',
+      optionA: '',
+      optionB: '',
+      duration: '',
+      image: null,
+      tags: null,
+      timestamp: Date.now()
+    });
+
+    await bot.sendMessage(chatId, `➕ **Create New Market** - Step 1/6
+
+**Market Creation Fee:** ${creationFee} USDC + gas
+**Your Balance:** ${usdcBalance} USDC, ${ethBalance} ETH ✅
+
+Please enter your market question (max 200 characters):
+
+Example: "Will Bitcoin reach $100,000 by December 2025?"
+
+Send /cancel to abort.`, {
+      parse_mode: 'Markdown'
+    });
+
+  } catch (error) {
+    console.error('❌ Error in handleCreateMarketOptimized:', error);
+    await bot.sendMessage(chatId, `❌ Error starting market creation: Please try again later.`);
+  }
+}
+
+// TAG SELECTION HANDLER
+async function handleTagSelection(chatId, userId, data) {
+  try {
+    const session = userSessions.get(chatId);
+    if (!session || session.action !== 'create_market' || session.step !== 5) {
+      await bot.sendMessage(chatId, '❌ Invalid session. Please start market creation again.');
+      return;
+    }
+
+    const tag = data.replace('tag_', '');
+    session.tags = tag;
+    session.step = 6;
+    userSessions.set(chatId, session);
+
+    await showMarketSummary(chatId, session);
+
+  } catch (error) {
+    console.error('Error in handleTagSelection:', error);
+    await bot.sendMessage(chatId, '❌ Error selecting tag. Please try again.');
+  }
+}
+
+// SKIP TAGS HANDLER
+async function handleSkipTags(chatId, userId) {
+  try {
+    const session = userSessions.get(chatId);
+    if (!session || session.action !== 'create_market' || session.step !== 5) {
+      await bot.sendMessage(chatId, '❌ Invalid session. Please start market creation again.');
+      return;
+    }
+
+    session.tags = null; // No tag selected
+    session.step = 6;
+    userSessions.set(chatId, session);
+
+    await showMarketSummary(chatId, session);
+
+  } catch (error) {
+    console.error('Error in handleSkipTags:', error);
+    await bot.sendMessage(chatId, '❌ Error skipping tags. Please try again.');
+  }
+}
+
+// SHOW MARKET SUMMARY
+async function showMarketSummary(chatId, session) {
+  try {
+    const creationFee = await getMarketCreationFee();
+    
+    let summaryMessage = `📋 **Market Creation Summary**
+
+**Question:** ${session.question}
+**Option A:** ${session.optionA}
+**Option B:** ${session.optionB}
+**Duration:** ${session.duration}
+**Category:** ${session.tags || 'None'}
+**Image:** ${session.image ? '✅ Uploaded' : '❌ None'}
+
+**Cost:** ${creationFee} USDC + gas fees
+
+Ready to create this market?`;
+
+    const confirmButtons = [
+      [{ text: '✅ Create Market', callback_data: 'confirm_create_market' }],
+      [{ text: '❌ Cancel', callback_data: 'cancel_create_market' }],
+      [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+    ];
+
+    if (session.image) {
+      await bot.sendPhoto(chatId, session.image, {
+        caption: summaryMessage,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: confirmButtons }
+      });
+    } else {
+      await bot.sendMessage(chatId, summaryMessage, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: confirmButtons }
+      });
+    }
+
+  } catch (error) {
+    console.error('Error showing market summary:', error);
+    await bot.sendMessage(chatId, '❌ Error showing summary. Please try again.');
+  }
+}
+
+// CONFIRM CREATE MARKET - FIXED WITH ALTERNATIVE FUNCTIONS
+async function handleConfirmCreateMarket(chatId, userId) {
+  try {
+    const session = userSessions.get(chatId);
+    if (!session || session.action !== 'create_market') {
+      await bot.sendMessage(chatId, '❌ Invalid session.');
+      return;
+    }
+
+    const processingMsg = await bot.sendMessage(chatId, '🔄 Creating market on blockchain...\nThis may take 1-2 minutes.');
+
+    const user = await getOrCreateUserOptimized(userId);
+    const wallet = await getUserSpreddWallet(userId);
+    
+    if (!wallet) {
+      await bot.editMessageText('❌ Wallet not found.', {
+        chat_id: chatId,
+        message_id: processingMsg.message_id
+      });
+      return;
+    }
+
+    // Calculate end time
+    const durationDays = parseInt(session.duration);
+    const endTime = Math.floor(Date.now() / 1000) + (durationDays * 24 * 60 * 60);
+
+    // Create wallet instance with private key
+    const userWallet = new ethers.Wallet(wallet.privateKey, provider);
+    const factoryWithSigner = factoryContract.connect(userWallet);
+
+    // Try alternative market creation if main function fails
+    let createTx;
+    try {
+      createTx = await factoryWithSigner.createMarket(
+        session.question,
+        session.optionA,
+        session.optionB,
+        endTime
+      );
+    } catch (primaryError) {
+      console.log('Primary createMarket failed, trying alternative function...');
+      try {
+        createTx = await factoryWithSigner.createPredictionMarket(
+          session.question,
+          session.optionA,
+          session.optionB,
+          endTime
+        );
+      } catch (secondaryError) {
+        console.log('Both creation methods failed');
+        throw primaryError; // Throw the original error
+      }
+    }
+
+    await bot.editMessageText('⏳ Transaction submitted. Waiting for confirmation...', {
+      chat_id: chatId,
+      message_id: processingMsg.message_id
+    });
+
+    const receipt = await createTx.wait();
+    console.log('Market creation receipt:', receipt);
+
+    // Extract market ID from transaction receipt
+    const marketCreatedEvent = receipt.logs.find(log => {
+      try {
+        const decoded = factoryContract.interface.parseLog(log);
+        return decoded.name === 'MarketCreated';
+      } catch (e) {
+        return false;
+      }
+    });
+
+    let marketId = null;
+    if (marketCreatedEvent) {
+      const decoded = factoryContract.interface.parseLog(marketCreatedEvent);
+      marketId = decoded.args.marketId;
+    }
+
+    // FIXED: Add missing variable declaration and use correct column names
+    const resolutionDate = new Date(endTime * 1000);
+    const marketData = {
+      marketId: marketId || `manual_${Date.now()}`,
+      question: session.question,
+      optionA: session.optionA,
+      optionB: session.optionB,
+      resolutionDate: resolutionDate.toISOString(),
+      creatorId: user.id,
+      isResolved: false,
+      outcome: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      image: session.image,
+      tags: session.tags
+    };
+
+    const { data: createdMarket, error: dbError } = await supabase
+      .from('Market')
+      .insert([marketData])
+      .select()
+      .single();
+
+    if (dbError) {
+      console.error('Database error:', dbError);
+    }
+
+    // Clean up session
+    userSessions.delete(chatId);
+
+    // FIXED: Create outcomes after market creation
+    if (createdMarket) {
+      const outcomes = [
+        {
+          marketId: createdMarket.id,
+          outcome_title: session.optionA,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        {
+          marketId: createdMarket.id, 
+          outcome_title: session.optionB,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ];
+
+      const { error: outcomeError } = await supabase
+        .from('Outcome')
+        .insert(outcomes);
+
+      if (outcomeError) {
+        console.error('Error creating outcomes:', outcomeError);
+      }
+    }
+    
+    await bot.editMessageText(`🎉 **Market Created Successfully!**
+
+**Question:** ${session.question}
+**Options:** ${session.optionA} vs ${session.optionB}
+**Duration:** ${session.duration} days
+**Category:** ${session.tags || 'None'}
+**Image:** ${session.image ? 'Included' : 'None'}
+
+${marketId ? `**Market ID:** \`${marketId}\`` : ''}
+**Transaction:** \`${createTx.hash}\`
+
+Your market is now live and available for betting!`, {
+      chat_id: chatId,
+      message_id: processingMsg.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🏪 View Markets', callback_data: 'browse_markets' }],
+          [{ text: '➕ Create Another', callback_data: 'create_market' }],
+          [{ text: '⬅️ Main Menu', callback_data: 'main_menu' }]
+        ]
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating market:', error);
+    userSessions.delete(chatId);
+    
+    // FIXED: Improved error handling to prevent Telegram formatting errors
+    let errorMessage = 'Unknown error occurred';
+    let troubleshooting = '';
+    
+    if (error.message) {
+      if (error.message.includes('Week not active')) {
+        errorMessage = 'Smart contract validation failed';
+        troubleshooting = 'This may be a temporary contract issue. Market creation should work independently of weekly cycles.';
+      } else if (error.message.includes('insufficient funds')) {
+        errorMessage = 'Insufficient funds for transaction';
+        troubleshooting = 'Please ensure you have enough USDC for the creation fee and ETH for gas.';
+      } else if (error.message.includes('revert')) {
+        errorMessage = 'Transaction was rejected by the smart contract';
+        troubleshooting = 'This may be a temporary blockchain issue. Please try again in a few minutes.';
+      } else if (error.message.includes('gas')) {
+        errorMessage = 'Gas estimation failed';
+        troubles
